@@ -4,7 +4,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from decimal import Decimal
 
 from cryptoagents.dataflows import NansenAPI, CoinGeckoAPI
 
@@ -274,8 +273,7 @@ class PortfolioManager:
         # Process each trade decision
         for symbol, (signal, confidence, score) in trade_decisions.items():
             current_allocation = self.current_state.get_allocation_by_symbol(symbol)
-            current_value = self.current_state.get_asset_value(symbol)
-            
+
             # Calculate target allocation based on signal strength
             if signal == "BUY":
                 # Buy strength based on score and confidence

@@ -76,7 +76,6 @@ class BaseAnalyst(ABC):
         raw_score = (positive_factors - negative_factors) / total_factors
 
         # Confidence based on number of factors and agreement
-        agreement = abs(positive_factors - negative_factors) / total_factors
         confidence = (len([x for x in [positive_factors, negative_factors] if x > 0]) / 2)
 
         return raw_score, confidence

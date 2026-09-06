@@ -164,7 +164,7 @@ async def transfer_usdc_to_perps():
             logger.info(f"   r: {signature['r'][:20]}...")
             logger.info(f"   s: {signature['s'][:20]}...")
             
-        except ValueError as e:
+        except ValueError:
             # eth_account rejects this domain type
             logger.warning(f"⚠️  eth_account rejected domain '{eip712_data.get('domain', {}).get('name')}'")
             logger.info("   Trying alternative signing with ECRecovery validation...")

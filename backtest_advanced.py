@@ -220,91 +220,17 @@ def run_advanced_backtest(
         )
         logger.info("✓ Backtest engine initialized")
         
-        # Advanced analysis function
-        def advanced_analyze(symbol, date, price):
-            """Advanced analysis using multiple indicators"""
-            
-            # Find current index
-            current_idx = None
-            for i, (d, p) in enumerate(historical_prices):
-                if d.date() == date.date():
-                    current_idx = i
-                    break
-            
-            if current_idx is None or current_idx < 5:
-                return "HOLD", 0.5, 0.0
-            
-            # Calculate multiple indicators
-            recent_prices = [p[1] for p in historical_prices[max(0, current_idx-20):current_idx+1]]
-            
-            # SMA (20-day moving average)
-            sma_20 = sum(recent_prices) / len(recent_prices)
-            
-            # RSI-like calculation
-            changes = [recent_prices[i] - recent_prices[i-1] for i in range(1, len(recent_prices))]
-            up_avg = sum([c for c in changes if c > 0]) / max(len([c for c in changes if c > 0]), 1)
-            down_avg = sum([abs(c) for c in changes if c < 0]) / max(len([c for c in changes if c < 0]), 1)
-            rs = up_avg / down_avg if down_avg != 0 else 1
-            rsi = 100 - (100 / (1 + rs))
-            
-            # Momentum (10-day)
-            momentum = (recent_prices[-1] - recent_prices[max(0, -10)]) / recent_prices[max(0, -10)]
-            
-            # Decision logic
-            signals = []
-            confidence_factors = []
-            
-            # Price above SMA = bullish
-            if price > sma_20:
-                signals.append(0.3)
-                confidence_factors.append(0.7)
-            else:
-                signals.append(-0.3)
-                confidence_factors.append(0.7)
-            
-            # RSI signals
-            if rsi < 30:
-                signals.append(0.5)  # Oversold
-                confidence_factors.append(0.8)
-            elif rsi > 70:
-                signals.append(-0.5)  # Overbought
-                confidence_factors.append(0.8)
-            else:
-                signals.append(0.1)
-                confidence_factors.append(0.5)
-            
-            # Momentum signals
-            if momentum > 0.05:
-                signals.append(0.4)
-                confidence_factors.append(0.8)
-            elif momentum < -0.05:
-                signals.append(-0.4)
-                confidence_factors.append(0.8)
-            else:
-                signals.append(0.0)
-                confidence_factors.append(0.5)
-            
-            # Combine signals
-            overall_score = sum(signals) / len(signals) if signals else 0
-            confidence = sum(confidence_factors) / len(confidence_factors)
-            
-            # Determine action
-            if overall_score > 0.2 and confidence > 0.6:
-                return "BUY", confidence, overall_score
-            elif overall_score < -0.2 and confidence > 0.6:
-                return "SELL", confidence, overall_score
-            else:
-                return "HOLD", 0.5, overall_score
-        
         # Run backtest
         logger.info(f"\nRunning advanced backtest for {symbol}...")
         logger.info(f"Data points: {len(historical_prices)}")
         logger.info(f"Period: {historical_prices[0][0].date()} to {historical_prices[-1][0].date()}")
-        
+        logger.info("Each day calls the live multi-agent strategy (5 analysts + debate + trader) - this can take a while")
+
+        # analyze_func left as None: BacktestEngine.run_backtest() falls back to
+        # trading_graph.propagate() per day, i.e. the actual live trading strategy
         result = engine.run_backtest(
             symbol=symbol,
             historical_prices=historical_prices,
-            analyze_func=advanced_analyze
         )
         
         # Generate HTML report

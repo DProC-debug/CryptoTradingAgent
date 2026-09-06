@@ -1,7 +1,6 @@
 """CLI interface using Typer for CryptoTradingAgents"""
 
 import logging
-from typing import Optional
 
 import typer
 from rich.console import Console

@@ -68,37 +68,13 @@ def run_backtest(
         logger.info(f"\nRunning backtest for {symbol}...")
         logger.info(f"Data points: {len(historical_prices)}")
         logger.info(f"Period: {historical_prices[0][0].date()} to {historical_prices[-1][0].date()}")
-        
-        # Simple analysis function for backtest
-        def analyze_price(symbol, date, price):
-            """Simple analysis based on price momentum"""
-            if len(historical_prices) < 20:
-                return "HOLD", 0.5, 0.0
-            
-            current_idx = None
-            for i, (d, p) in enumerate(historical_prices):
-                if d.date() == date.date():
-                    current_idx = i
-                    break
-            
-            if current_idx is None or current_idx < 20:
-                return "HOLD", 0.5, 0.0
-            
-            # Calculate 20-day momentum
-            prev_price = historical_prices[current_idx - 20][1]
-            momentum = (price - prev_price) / prev_price
-            
-            if momentum > 0.05:  # 5% gain in 20 days = bullish
-                return "BUY", min(0.9, momentum * 10), momentum
-            elif momentum < -0.05:  # 5% loss = bearish
-                return "SELL", min(0.9, abs(momentum) * 10), momentum
-            else:
-                return "HOLD", 0.5, momentum
-        
+        logger.info("Each day calls the live multi-agent strategy (5 analysts + debate + trader) - this can take a while")
+
+        # analyze_func left as None: BacktestEngine.run_backtest() falls back to
+        # trading_graph.propagate() per day, i.e. the actual live trading strategy
         result = engine.run_backtest(
             symbol=symbol,
             historical_prices=historical_prices,
-            analyze_func=analyze_price
         )
         
         # Print summary

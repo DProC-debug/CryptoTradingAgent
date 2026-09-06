@@ -1,7 +1,6 @@
 """Nansen API wrapper for blockchain on-chain analytics"""
 
 import logging
-from typing import Optional
 
 import requests
 

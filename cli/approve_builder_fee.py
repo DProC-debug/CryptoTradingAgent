@@ -5,9 +5,7 @@ Checks status -> Requests EIP712 -> Signs locally -> Executes approval
 """
 
 import asyncio
-import json
 import sys
-from typing import Optional
 
 try:
     from eth_account import Account

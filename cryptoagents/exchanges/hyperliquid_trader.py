@@ -9,7 +9,6 @@ from typing import Dict, Optional, List
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-import time
 
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils.constants import MAINNET_API_URL
@@ -46,6 +45,11 @@ class PositionData:
     entry_time: datetime
     status: str = "open"
     metadata: Dict = field(default_factory=dict)
+    # Cumulative funding since this position was opened, in USD. Positive = paid (a cost),
+    # negative = received (a gain) - matches Hyperliquid's cumFunding.sinceOpen convention.
+    # NOTE: this sign convention is not verified against a live funded account in this repo -
+    # confirm it holds before relying on it for anything beyond the informational display below.
+    funding_paid: float = 0.0
 
     @property
     def is_profitable(self) -> bool:
@@ -408,6 +412,7 @@ class HyperliquidTrader:
                 leverage = int(leverage_field.get("value", 1)) if isinstance(leverage_field, dict) else int(float(leverage_field or 1))
                 margin_used = float(pos.get("marginUsed", 0) or 0)
                 unrealized_pnl = float(pos.get("unrealizedPnl", 0))
+                funding_paid = float((pos.get("cumFunding") or {}).get("sinceOpen", 0) or 0)
 
                 # Prefer Hyperliquid's own returnOnEquity (return on margin) - pnl/notional
                 # understates real P&L% by roughly `leverage`x and would make TP/SL never fire.
@@ -430,7 +435,8 @@ class HyperliquidTrader:
                     unrealized_pnl=unrealized_pnl,
                     unrealized_pnl_percentage=pnl_pct,
                     entry_time=datetime.now(),  # Would need from position details
-                    status="open"
+                    status="open",
+                    funding_paid=funding_paid,
                 )
                 open_positions.append(position_data)
             

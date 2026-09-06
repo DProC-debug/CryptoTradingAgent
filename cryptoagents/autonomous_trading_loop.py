@@ -4,10 +4,11 @@ Continuously executes trading cycles without manual intervention
 """
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import List, Optional
 from dotenv import load_dotenv
 
 from cryptoagents.graph.trading_graph import CryptoTradingGraph
@@ -48,6 +49,37 @@ class TradeRecord:
             "pnl_percentage": f"{self.pnl_percentage * 100:.1f}%" if self.pnl_percentage else "N/A"
         }
 
+    def to_state(self):
+        """Serialize with raw types (not display-formatted) for crash-safe persistence"""
+        return {
+            "symbol": self.symbol,
+            "signal": self.signal,
+            "confidence": self.confidence,
+            "entry_price": self.entry_price,
+            "leverage": self.leverage,
+            "timestamp": self.timestamp.isoformat(),
+            "status": self.status,
+            "exit_price": self.exit_price,
+            "pnl": self.pnl,
+            "pnl_percentage": self.pnl_percentage,
+        }
+
+    @classmethod
+    def from_state(cls, data: dict) -> "TradeRecord":
+        record = cls(
+            symbol=data["symbol"],
+            signal=data["signal"],
+            confidence=data["confidence"],
+            entry_price=data["entry_price"],
+            leverage=data["leverage"],
+        )
+        record.timestamp = datetime.fromisoformat(data["timestamp"])
+        record.status = data["status"]
+        record.exit_price = data.get("exit_price")
+        record.pnl = data.get("pnl")
+        record.pnl_percentage = data.get("pnl_percentage")
+        return record
+
 
 class AutonomousTrader:
     """
@@ -64,10 +96,19 @@ class AutonomousTrader:
         self.execution_interval_minutes = int(os.getenv("HYPERLIQUID_EXECUTION_INTERVAL_MINUTES", "60"))
         self.monitoring_interval_seconds = int(os.getenv("HYPERLIQUID_MONITORING_INTERVAL_SECONDS", "300"))
         self.max_concurrent_positions = int(os.getenv("HYPERLIQUID_MAX_CONCURRENT_POSITIONS", "3"))
+        # Correlation proxy: real historical-correlation data isn't available for arbitrary
+        # altcoins here, so this caps concurrent exposure to the same CoinGecko sector/category
+        # tag instead (e.g. "Layer 1 (L1)", "Meme", "DeFi") to avoid 5 "different" positions
+        # that are really one correlated bet.
+        self.max_positions_per_category = int(os.getenv("HYPERLIQUID_MAX_POSITIONS_PER_CATEGORY", "2"))
         self.max_daily_trades = int(os.getenv("HYPERLIQUID_MAX_DAILY_TRADES", "10"))
+        self.max_daily_loss_pct = float(os.getenv("HYPERLIQUID_MAX_DAILY_LOSS_PCT", "0.05"))
         self.position_size_usd = float(os.getenv("HYPERLIQUID_POSITION_SIZE_USD", "50"))
-        self.take_profit_pct = float(os.getenv("HYPERLIQUID_TAKE_PROFIT_PCT", "0.30"))
-        self.stop_loss_pct = float(os.getenv("HYPERLIQUID_STOP_LOSS_PCT", "-0.30"))
+        # Raw price-move percentages (NOT leveraged ROE) - see monitor_positions().
+        # Defaults are asymmetric (2:1 reward:risk) and both comfortably clear the slippage
+        # tolerance below, so typical execution cost can't eat the whole target/stop.
+        self.take_profit_pct = float(os.getenv("HYPERLIQUID_TAKE_PROFIT_PCT", "0.12"))
+        self.stop_loss_pct = float(os.getenv("HYPERLIQUID_STOP_LOSS_PCT", "-0.06"))
         self.max_leverage = int(os.getenv("HYPERLIQUID_MAX_LEVERAGE", "20"))
         self.slippage = float(os.getenv("HYPERLIQUID_SLIPPAGE", "0.03"))
         self.order_type = os.getenv("HYPERLIQUID_ORDER_TYPE", "market")
@@ -89,6 +130,8 @@ class AutonomousTrader:
         self.trades_today: List[TradeRecord] = []
         self.is_running = False
         self.cycle_count = 0
+        self.current_day = datetime.now().date()
+        self.daily_starting_balance: Optional[float] = None
         
         # Initialize APIs
         logger.info("[INIT] Initializing APIs...")
@@ -96,7 +139,13 @@ class AutonomousTrader:
         self.coin_selector = CoinSelector(self.coingecko_api, exclude_symbols=self.exclude_coins)
         self.trading_graph = CryptoTradingGraph(debug=False)
         self.hyperliquid_trader = None
-        
+
+        # Crash-safe state: survive a process restart without losing today's trade/loss
+        # bookkeeping. Real open positions are always re-fetched live from the exchange, so
+        # only this in-memory accounting needs persisting.
+        self.state_file = os.path.join(self.trading_graph.config["data_cache_dir"], "autonomous_trader_state.json")
+        self._load_state()
+
         logger.info(f"[OK] AutonomousTrader initialized")
         logger.info(f"   Trading enabled: {self.trading_enabled}")
         logger.info(f"   Trading backend: {self.trading_backend}")
@@ -143,27 +192,153 @@ class AutonomousTrader:
             logger.error(f"[ERROR] Failed to initialize {self.trading_backend} trader: {e}")
             return False
     
+    def _load_state(self):
+        """Restore trades_today/daily_starting_balance/cycle_count if today's state was
+        persisted (e.g. after a crash/restart). Discards anything from a previous day -
+        _roll_over_day_if_needed() handles the same reset during a long-running process."""
+        try:
+            if not os.path.exists(self.state_file):
+                return
+            with open(self.state_file, "r") as f:
+                data = json.load(f)
+            if data.get("date") != self.current_day.isoformat():
+                logger.info(f"[STATE] Discarding persisted state from {data.get('date')} (today is {self.current_day})")
+                return
+            self.trades_today = [TradeRecord.from_state(t) for t in data.get("trades_today", [])]
+            self.daily_starting_balance = data.get("daily_starting_balance")
+            self.cycle_count = data.get("cycle_count", 0)
+            logger.info(f"[STATE] Restored {len(self.trades_today)} trade(s) from today's persisted state")
+        except Exception as e:
+            logger.warning(f"[WARN] Could not load persisted state, starting fresh: {e}")
+
+    def _save_state(self):
+        """Persist trades_today/daily_starting_balance/cycle_count so a crash/restart doesn't
+        lose today's bookkeeping. Real open positions are always re-fetched live from the
+        exchange, so only this in-memory accounting needs saving. Written atomically (temp
+        file + rename) so a crash mid-write can't corrupt the existing file."""
+        try:
+            os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
+            data = {
+                "date": self.current_day.isoformat(),
+                "daily_starting_balance": self.daily_starting_balance,
+                "cycle_count": self.cycle_count,
+                "trades_today": [t.to_state() for t in self.trades_today],
+            }
+            tmp_path = self.state_file + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, self.state_file)
+        except Exception as e:
+            logger.warning(f"[WARN] Could not persist state: {e}")
+
+    def _get_coin_categories(self, symbol: str) -> set:
+        """Fetch CoinGecko sector/category tags for a symbol (correlation proxy - see
+        max_positions_per_category). Fails open (returns an empty set) on any error so a
+        CoinGecko hiccup can't block trading entirely, only skip this one check."""
+        try:
+            coin_id = self.coingecko_api.resolve_coin_id(symbol)
+            if not coin_id:
+                return set()
+            details = self.coingecko_api.get_coin_details(coin_id)
+            return {c for c in (details.get("categories") or []) if c}
+        except Exception as e:
+            logger.warning(f"[WARN] Could not fetch categories for {symbol}: {e}")
+            return set()
+
+    def _roll_over_day_if_needed(self):
+        """Reset daily counters (trade count, loss-breaker baseline) at each real calendar day boundary"""
+        today = datetime.now().date()
+        if today != self.current_day:
+            logger.info(f"[NEW DAY] Rolling over from {self.current_day} to {today} - resetting daily counters")
+            self.current_day = today
+            self.trades_today = []
+            self.daily_starting_balance = None
+            self._save_state()
+
+    def _within_daily_loss_limit(self) -> bool:
+        """Daily P&L circuit breaker.
+
+        Halts new entries (not position monitoring - TP/SL closes still run) once today's
+        loss crosses max_daily_loss_pct of the day's starting balance. Compares the live
+        account balance directly against the day's starting baseline, rather than manually
+        summing closed-trade P&L + live unrealized P&L - Hyperliquid's accountValue is total
+        mark-to-market equity (collateral + unrealized P&L on open positions), and moves in
+        real time as funding gets settled. A manual sum misses funding entirely (neither
+        closed-trade P&L nor unrealized_pnl includes it), so a position quietly bleeding
+        funding fees all day wouldn't trip the breaker even as the account actually drains.
+        Comparing live balance to the baseline directly captures everything that actually
+        moves the account - trade P&L, funding, all of it - with no risk of double-counting.
+        Resets automatically at the next day rollover.
+        """
+        balance_info = self.hyperliquid_trader.get_account_balance()
+        if balance_info.get("error"):
+            logger.warning(f"[WARN] Could not check daily loss limit: {balance_info.get('error')}")
+            return True  # fail open - a balance-check hiccup shouldn't itself halt trading
+
+        current_balance = balance_info.get("total_collateral", 0)
+
+        if self.daily_starting_balance is None:
+            self.daily_starting_balance = current_balance
+            logger.info(f"[DAY START] Baseline balance for loss limit: ${self.daily_starting_balance:,.2f}")
+            self._save_state()
+
+        if not self.daily_starting_balance:
+            return True  # nothing meaningful to compare against
+
+        day_pnl_pct = (current_balance - self.daily_starting_balance) / self.daily_starting_balance
+
+        if day_pnl_pct <= -self.max_daily_loss_pct:
+            logger.warning(
+                f"[CIRCUIT BREAKER] Daily loss limit hit: {day_pnl_pct:+.2%} "
+                f"(limit -{self.max_daily_loss_pct:.0%}) - halting new trades until tomorrow"
+            )
+            return False
+
+        return True
+
     async def execute_trading_cycle(self):
         """Execute one complete trading cycle: select, analyze, execute"""
         self.cycle_count += 1
         logger.info(f"\n{'='*70}")
         logger.info(f"[CYCLE] #{self.cycle_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"{'='*70}")
-        
+
         try:
-            # Step 1: Check daily trade limit
+            self._roll_over_day_if_needed()
+
+            # Step 1: Fetch open positions once - needed for the loss breaker, the concurrent
+            # position limit, and to avoid re-entering a coin we already hold
+            open_positions = []
+            open_symbols = set()
+            if self.hyperliquid_trader:
+                open_positions = self.hyperliquid_trader.get_open_positions()
+                open_symbols = {p.symbol for p in open_positions}
+            # Simulated trades never touch the exchange, so track their "OPEN" status separately
+            open_symbols |= {t.symbol for t in self.trades_today if t.status == "OPEN"}
+
+            # Category exposure of currently open positions (correlation proxy - see
+            # _get_coin_categories); updated live below as new candidates get accepted
+            category_counts: dict = {}
+            for sym in open_symbols:
+                for cat in self._get_coin_categories(sym):
+                    category_counts[cat] = category_counts.get(cat, 0) + 1
+
+            # Step 2: Daily loss circuit breaker - stop opening new trades, existing positions
+            # still get monitored/closed normally
+            if self.hyperliquid_trader and not self._within_daily_loss_limit():
+                return
+
+            # Step 3: Check daily trade limit
             if len(self.trades_today) >= self.max_daily_trades:
                 logger.warning(f"[WARN] Daily trade limit reached ({self.max_daily_trades} trades)")
                 return
-            
-            # Step 2: Check concurrent position limit
-            if self.hyperliquid_trader:
-                open_positions = len(self.hyperliquid_trader.get_open_positions())
-                if open_positions >= self.max_concurrent_positions:
-                    logger.warning(f"[WARN] Max concurrent positions reached ({open_positions}/{self.max_concurrent_positions})")
-                    return
-            
-            # Step 3: Select a batch of coins for the cycle
+
+            # Step 4: Check concurrent position limit
+            if self.hyperliquid_trader and len(open_positions) >= self.max_concurrent_positions:
+                logger.warning(f"[WARN] Max concurrent positions reached ({len(open_positions)}/{self.max_concurrent_positions})")
+                return
+
+            # Step 5: Select a batch of coins for the cycle
             logger.info("\n[STEP 1] Selecting 5 altcoins for batch analysis...")
             market_data = self.coingecko_api.get_market_data(per_page=250, page=1)
             candidate_coins = await self.coin_selector.select_n_random_coins(
@@ -179,10 +354,13 @@ class AutonomousTrader:
                 logger.info(f"   - {coin.symbol}: ${coin.current_price:.6f} (Vol: ${coin.volume_24h_usd:,.0f})")
 
             actionable_trades = []
-            confidence_threshold = 0.0  # RELAXED: Trade on ANY confidence (was 0.5/50%)
 
-            # Step 4: Analyze each coin in the batch
+            # Step 6: Analyze each coin in the batch
             for coin in candidate_coins:
+                if coin.symbol in open_symbols:
+                    logger.info(f"[SKIP] {coin.symbol} already has an open position - skipping re-entry")
+                    continue
+
                 logger.info(f"\n[STEP 2] Analyzing {coin.symbol}...")
                 success, analysis = await self.trading_graph.propagate(coin.symbol, None)
                 
@@ -201,18 +379,37 @@ class AutonomousTrader:
                     logger.info(f"   Suggested Entry: ${entry_price:.6f}")
                 
                 if signal in ("BUY", "SELL"):
+                    candidate_categories = self._get_coin_categories(coin.symbol)
+                    over_exposed = [
+                        cat for cat in candidate_categories
+                        if category_counts.get(cat, 0) >= self.max_positions_per_category
+                    ]
+                    if over_exposed:
+                        logger.info(
+                            f"[SKIP] {coin.symbol} rejected: already at max "
+                            f"({self.max_positions_per_category}) positions in category {over_exposed}"
+                        )
+                        continue
+
                     # Execute BUY/SELL signals regardless of confidence
                     logger.info(f"[ACTION] Candidate trade identified: {coin.symbol} {signal} @ {confidence * 100:.1f}%")
                     actionable_trades.append({
                         "coin": coin,
                         "signal": signal,
                         "confidence": confidence,
-                        "entry_price": entry_price or coin.current_price
+                        "entry_price": entry_price or coin.current_price,
+                        # Risk manager's 0-1 fraction of the configured base position size
+                        # (already accounts for portfolio-risk-limit and confidence scaling)
+                        "position_size_fraction": min(1.0, max(0.0, analysis.get("position_size", 1.0)))
                     })
+                    # Count this accepted candidate immediately so a second correlated pick
+                    # in the same batch is also caught, not just already-open positions
+                    for cat in candidate_categories:
+                        category_counts[cat] = category_counts.get(cat, 0) + 1
                 else:
                     logger.info(f"[SKIP] {coin.symbol} rejected: signal={signal}, confidence={confidence * 100:.1f}%")
 
-            # Step 5: Make trading decision for the batch
+            # Step 7: Make trading decision for the batch
             logger.info(f"\n[STEP 3] Evaluating batch results...")
             if not actionable_trades:
                 logger.info(f"[SKIP] No actionable BUY/SELL signals in this 5-coin batch")
@@ -224,11 +421,13 @@ class AutonomousTrader:
                 signal = trade_candidate["signal"]
                 confidence = trade_candidate["confidence"]
                 entry_price = trade_candidate["entry_price"]
+                size_fraction = trade_candidate["position_size_fraction"]
+                position_size_usd = self.position_size_usd * size_fraction
 
                 if not self.trading_enabled:
                     logger.info(f"[INFO] HYPERLIQUID_TRADING_ENABLED=false")
                     logger.info(f"   Simulating trade for {coin.symbol}: {signal} @ {confidence * 100:.1f}%")
-                    self._log_simulated_trade(coin.symbol, signal, confidence, entry_price)
+                    self._log_simulated_trade(coin.symbol, signal, confidence, entry_price, position_size_usd)
                     continue
 
                 logger.info(f"\n[STEP 4] Executing {signal} order for {coin.symbol}...")
@@ -236,7 +435,7 @@ class AutonomousTrader:
                 is_buy = signal == "BUY"
 
                 logger.info(f"   Order Direction: {'BUY' if is_buy else 'SELL'}")
-                logger.info(f"   Position Size: ${self.position_size_usd}")
+                logger.info(f"   Position Size: ${position_size_usd:.2f} (base ${self.position_size_usd} x risk-adjusted {size_fraction:.0%})")
                 logger.info(f"   Leverage: {leverage:.1f}x (confidence-scaled)")
                 logger.info(f"   Entry Price: ${coin.current_price:.6f}")
 
@@ -251,7 +450,7 @@ class AutonomousTrader:
                 order_result = self.hyperliquid_trader.open_position(
                     symbol=coin.symbol,
                     is_buy=is_buy,
-                    size_usd=self.position_size_usd,
+                    size_usd=position_size_usd,
                     leverage=leverage,
                     slippage=self.slippage,
                     price=coin.current_price,
@@ -271,6 +470,7 @@ class AutonomousTrader:
                         leverage=leverage
                     )
                     self.trades_today.append(trade)
+                    self._save_state()
                     logger.info(f"   Trade #{len(self.trades_today)} recorded")
                 else:
                     logger.error(f"[ERROR] ORDER FAILED for {coin.symbol}: {order_result.error}")
@@ -286,19 +486,22 @@ class AutonomousTrader:
         except Exception as e:
             logger.error(f"[ERROR] Trading cycle failed: {e}", exc_info=True)
     
-    def _log_simulated_trade(self, symbol, signal, confidence, entry_price):
+    def _log_simulated_trade(self, symbol, signal, confidence, entry_price, position_size_usd=None):
         """Log a simulated trade (when trading disabled)"""
+        if position_size_usd is None:
+            position_size_usd = self.position_size_usd
         logger.info(f"[DEMO] SIMULATED TRADE:")
         logger.info(f"   Symbol: {symbol}")
         logger.info(f"   Signal: {signal}")
         logger.info(f"   Confidence: {confidence * 100:.1f}%")
         leverage = min(confidence * self.max_leverage, self.max_leverage)
-        logger.info(f"   Would execute: {signal} {self.position_size_usd}USD @ {leverage:.1f}x leverage")
+        logger.info(f"   Would execute: {signal} ${position_size_usd:.2f} @ {leverage:.1f}x leverage")
         logger.info(f"   Entry Price: ${entry_price:.6f}")
         
         # Still record for statistics
         trade = TradeRecord(symbol, signal, confidence, entry_price, leverage)
         self.trades_today.append(trade)
+        self._save_state()
 
     async def monitor_positions(self):
         """Background task: Monitor positions and auto-close on take-profit/stop-loss"""
@@ -326,23 +529,34 @@ class AutonomousTrader:
                 logger.info(f"[OK] No open positions")
                 return
             
-            # Thresholds are stored as fractions (e.g. 0.30); PositionData reports pct points (e.g. 30.0)
+            # Thresholds are stored as fractions (e.g. 0.30); compared against raw price-move
+            # percentage, NOT leveraged ROE - otherwise the effective stop distance shrinks as
+            # leverage increases (a 30% ROE stop at 15x leverage is only a ~2% price move)
             take_profit_threshold = self.take_profit_pct * 100
             stop_loss_threshold = self.stop_loss_pct * 100
-            
+
             logger.info(f"[OK] Open positions:")
             for pos in open_positions:
-                pnl_pct = pos.unrealized_pnl_percentage
-                pnl_symbol = "📈" if pnl_pct > 0 else "📉"
-                logger.info(f"   {pos.symbol}: {pos.size} units @ ${pos.entry_price:.6f}")
-                logger.info(f"      Current: ${pos.current_price:.6f} {pnl_symbol} {pnl_pct:+.2f}%")
-                logger.info(f"      P&L: ${pos.unrealized_pnl:+.2f}")
+                price_move_pct = ((pos.current_price - pos.entry_price) / pos.entry_price) * 100
+                if pos.side.value == "SHORT":
+                    price_move_pct = -price_move_pct
 
-                if pnl_pct >= take_profit_threshold:
-                    logger.info(f"   [TP HIT] {pos.symbol} reached +{pnl_pct:.2f}% (threshold {take_profit_threshold:.2f}%)")
+                pnl_symbol = "📈" if price_move_pct > 0 else "📉"
+                logger.info(f"   {pos.symbol}: {pos.size} units @ ${pos.entry_price:.6f}")
+                logger.info(
+                    f"      Current: ${pos.current_price:.6f} {pnl_symbol} {price_move_pct:+.2f}% price move "
+                    f"(ROE {pos.unrealized_pnl_percentage:+.2f}%)"
+                )
+                logger.info(f"      P&L: ${pos.unrealized_pnl:+.2f}")
+                if pos.funding_paid:
+                    funding_label = "paid" if pos.funding_paid > 0 else "received"
+                    logger.info(f"      Funding {funding_label} since open: ${abs(pos.funding_paid):.2f}")
+
+                if price_move_pct >= take_profit_threshold:
+                    logger.info(f"   [TP HIT] {pos.symbol} price moved +{price_move_pct:.2f}% (threshold {take_profit_threshold:.2f}%)")
                     self._close_position_now(pos, reason="TAKE_PROFIT")
-                elif pnl_pct <= stop_loss_threshold:
-                    logger.info(f"   [SL HIT] {pos.symbol} reached {pnl_pct:.2f}% (threshold {stop_loss_threshold:.2f}%)")
+                elif price_move_pct <= stop_loss_threshold:
+                    logger.info(f"   [SL HIT] {pos.symbol} price moved {price_move_pct:.2f}% (threshold {stop_loss_threshold:.2f}%)")
                     self._close_position_now(pos, reason="STOP_LOSS")
         
         except Exception as e:
@@ -363,7 +577,13 @@ class AutonomousTrader:
             logger.error(f"[ERROR] Failed to close {pos.symbol} ({reason}): {close_result.error}")
             return
 
-        logger.info(f"[SUCCESS] Closed {pos.symbol} ({reason}) @ ${close_result.exit_price:.6f}")
+        # Net of funding paid/received over the position's life (see PositionData.funding_paid
+        # caveat: sign convention assumed, not yet verified against a live funded account)
+        net_pnl = pos.unrealized_pnl - pos.funding_paid
+        logger.info(
+            f"[SUCCESS] Closed {pos.symbol} ({reason}) @ ${close_result.exit_price:.6f} | "
+            f"price P&L ${pos.unrealized_pnl:+.2f}, funding ${-pos.funding_paid:+.2f}, net ${net_pnl:+.2f}"
+        )
 
         # Reconcile against the most recent open trade record for this symbol
         matching_trade = next(
@@ -373,8 +593,11 @@ class AutonomousTrader:
         if matching_trade:
             matching_trade.status = reason
             matching_trade.exit_price = close_result.exit_price
-            matching_trade.pnl = pos.unrealized_pnl
-            matching_trade.pnl_percentage = pos.unrealized_pnl_percentage / 100
+            matching_trade.pnl = net_pnl
+            matching_trade.pnl_percentage = (
+                net_pnl / pos.collateral_used if pos.collateral_used else pos.unrealized_pnl_percentage / 100
+            )
+            self._save_state()
     
     async def run_trading_loop(self):
         """Main autonomous trading loop - runs indefinitely"""

@@ -15,6 +15,20 @@ class CoinGeckoAPI:
     BASE_URL = "https://api.coingecko.com/api/v3"
     FREE_TIER_DELAY = 2.0  # seconds between requests for free tier (conservative)
 
+    # Common symbol -> CoinGecko coin id mappings (avoids a search round-trip for majors)
+    SYMBOL_TO_ID = {
+        "BTC": "bitcoin",
+        "ETH": "ethereum",
+        "SOL": "solana",
+        "ARB": "arbitrum",
+        "OP": "optimism",
+        "ADA": "cardano",
+        "XRP": "ripple",
+        "DOGE": "dogecoin",
+        "LTC": "litecoin",
+        "BCH": "bitcoin-cash",
+    }
+
     def __init__(self, api_key: Optional[str] = None):
         """Initialize CoinGecko API client
 
@@ -271,6 +285,25 @@ class CoinGeckoAPI:
             logger.error(f"Error searching cryptos: {e}")
             return []
 
+    def resolve_coin_id(self, symbol: str) -> Optional[str]:
+        """Resolve a ticker symbol to a CoinGecko coin id
+
+        Args:
+            symbol: Crypto symbol (BTC, ETH, SOL, etc)
+
+        Returns:
+            CoinGecko coin id (e.g. 'bitcoin'), or None if it can't be resolved
+        """
+        coin_id = self.SYMBOL_TO_ID.get(symbol.upper())
+        if coin_id:
+            return coin_id
+
+        logger.warning(f"Symbol {symbol} not found in symbol map, searching...")
+        results = self.search_crypto(symbol)
+        if results:
+            return results[0]["id"]
+        return None
+
     def get_crypto_by_symbol(self, symbol: str, vs_currency: str = "usd") -> dict:
         """Get crypto data by symbol
 
@@ -281,28 +314,9 @@ class CoinGeckoAPI:
         Returns:
             Crypto data
         """
-        # Map common symbols to CoinGecko IDs
-        symbol_map = {
-            "BTC": "bitcoin",
-            "ETH": "ethereum",
-            "SOL": "solana",
-            "ARB": "arbitrum",
-            "OP": "optimism",
-            "ADA": "cardano",
-            "XRP": "ripple",
-            "DOGE": "dogecoin",
-            "LTC": "litecoin",
-            "BCH": "bitcoin-cash",
-        }
-
-        crypto_id = symbol_map.get(symbol.upper())
+        crypto_id = self.resolve_coin_id(symbol)
         if not crypto_id:
-            logger.warning(f"Symbol {symbol} not found in symbol map, searching...")
-            results = self.search_crypto(symbol)
-            if results:
-                crypto_id = results[0]["id"]
-            else:
-                return {}
+            return {}
 
         try:
             data = self._get(

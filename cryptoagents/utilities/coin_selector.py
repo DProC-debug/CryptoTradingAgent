@@ -6,7 +6,7 @@ Selects random altcoins for autonomous trading based on market criteria
 import logging
 import os
 import random
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Dict
 from dataclasses import dataclass
 
 import numpy as np
@@ -87,7 +87,7 @@ class CoinSelector:
         try:
             if market_data is None:
                 # Fetch from CoinGecko
-                market_data = await self.coingecko_api.fetch_market_data(per_page=250, page=1)
+                market_data = self.coingecko_api.get_market_data(per_page=250, page=1)
             
             candidates = []
             
@@ -146,8 +146,10 @@ class CoinSelector:
         Returns:
             Selected CoinCandidate or None if no candidates available
         """
-        # Fetch fresh candidates if cache is empty
-        if not self.candidates_cache:
+        # Rebuild candidates whenever the caller hands us fresh market data (each trading
+        # cycle re-fetches from CoinGecko); only reuse the cache when none was supplied,
+        # so prices/volumes/ranks don't stay frozen at whatever they were on the first call
+        if market_data is not None or not self.candidates_cache:
             await self.fetch_candidates(market_data)
         
         if not self.candidates_cache:
@@ -213,7 +215,10 @@ class CoinSelector:
         Returns:
             List of selected CoinCandidate objects
         """
-        if not self.candidates_cache:
+        # Rebuild candidates whenever the caller hands us fresh market data (each trading
+        # cycle re-fetches from CoinGecko); only reuse the cache when none was supplied,
+        # so prices/volumes/ranks don't stay frozen at whatever they were on the first call
+        if market_data is not None or not self.candidates_cache:
             await self.fetch_candidates(market_data)
         
         if not self.candidates_cache:

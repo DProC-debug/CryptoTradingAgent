@@ -3,7 +3,6 @@
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

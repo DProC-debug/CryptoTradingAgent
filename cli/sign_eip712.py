@@ -197,7 +197,6 @@ def main():
         
         lines = []
         try:
-            import select
             
             # On Windows, select doesn't work the same way, so use a simpler approach
             if sys.platform == "win32":

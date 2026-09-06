@@ -103,8 +103,7 @@ async def demo_hyperliquid_trading():
         
         signal = analysis_result.get("signal", "HOLD")
         confidence = analysis_result.get("confidence", 0)
-        trader_decision = analysis_result.get("trader_decision", {})
-        
+
         logger.info(f"\n📊 Analysis Results:")
         logger.info(f"  Signal: {signal}")
         logger.info(f"  Confidence: {confidence*100:.1f}%")

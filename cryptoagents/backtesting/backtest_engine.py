@@ -4,7 +4,7 @@ import logging
 import asyncio
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime
 import statistics
 
 logger = logging.getLogger(__name__)
@@ -254,13 +254,11 @@ class BacktestEngine:
                     else:
                         signal, confidence, score = "HOLD", 0.5, 0.0
             except Exception as e:
-                logger.debug(f"Analysis failed for {symbol} on {date.date()}: {e}")
+                logger.warning(f"Analysis failed for {symbol} on {date.date()}: {e}")
                 signal, confidence, score = "HOLD", 0.5, 0.0
             
             # Execute trades based on signal
             if symbol in self.positions:
-                open_trade = self.positions[symbol]
-                
                 # Check if we should close position
                 if signal == "SELL" or (signal == "HOLD" and confidence < 0.5):
                     pnl = self._close_trade(symbol, price, date)
@@ -270,7 +268,7 @@ class BacktestEngine:
                 # Check if we should open position
                 if signal == "BUY" and confidence > 0.6:
                     position_size = min(self.max_position_size, confidence * 0.1)
-                    trade = self._open_trade(symbol, price, date, signal, confidence, score, position_size)
+                    self._open_trade(symbol, price, date, signal, confidence, score, position_size)
                     logger.info(f"  OPENED: {symbol} @ ${price:,.2f} ({position_size:.1%}) | Confidence: {confidence:.0%}")
             
             # Update equity curve with current market values
@@ -312,8 +310,7 @@ class BacktestEngine:
         
         # Calculate position value
         position_value = self.current_portfolio_value * position_size
-        amount = position_value / entry_price
-        
+
         trade = Trade(
             symbol=symbol,
             entry_date=date,

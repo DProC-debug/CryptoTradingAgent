@@ -3,7 +3,6 @@
 import logging
 from datetime import datetime, timedelta
 from typing import List, Tuple, Optional
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -27,61 +26,49 @@ class HistoricalDataFetcher:
         end_date: Optional[datetime] = None
     ) -> List[Tuple[datetime, float]]:
         """
-        Fetch daily historical prices for a symbol
-        
+        Fetch real daily historical prices for a symbol from CoinGecko
+
         Args:
             symbol: Cryptocurrency symbol (e.g., 'BTC', 'ETH')
             days: Number of days of history to fetch
-            end_date: End date for historical data (default: today)
-        
+            end_date: Unused - CoinGecko's market_chart endpoint only returns
+                "N days up to now", not an arbitrary past range. Kept for
+                backward compatibility with callers.
+
         Returns:
-            List of (datetime, price) tuples
+            List of (datetime, price) tuples, one per day, sorted ascending
         """
-        if end_date is None:
-            end_date = datetime.now()
-        
-        start_date = end_date - timedelta(days=days)
-        
         logger.info(f"Fetching {days} days of historical data for {symbol}")
-        logger.info(f"Period: {start_date.date()} to {end_date.date()}")
-        
-        prices = []
-        current_date = start_date
-        
-        # Generate daily dates and fetch prices
-        while current_date <= end_date:
-            try:
-                # Get market data for this date
-                market_data = self.coingecko.get_market_data()
-                
-                if market_data:
-                    # Find the symbol in market data
-                    for coin in market_data:
-                        if coin.get("symbol", "").upper() == symbol.upper():
-                            price = coin.get("current_price", 0)
-                            if price > 0:
-                                prices.append((current_date, price))
-                            break
-                
-                # Move to next day
-                current_date += timedelta(days=1)
-                
-                # Rate limiting
-                time.sleep(1.5)
-            
-            except Exception as e:
-                logger.warning(f"Error fetching data for {symbol} on {current_date.date()}: {e}")
-                current_date += timedelta(days=1)
-                continue
-        
-        logger.info(f"Fetched {len(prices)} price points for {symbol}")
-        
-        if not prices:
-            logger.warning(f"No historical data found for {symbol}")
-            # Return simulated data for demo
-            return self._generate_simulated_prices(symbol, days, end_date)
-        
-        return sorted(prices, key=lambda x: x[0])
+
+        coin_id = self.coingecko.resolve_coin_id(symbol)
+        if not coin_id:
+            logger.warning(f"Could not resolve {symbol} to a CoinGecko coin id - using simulated data")
+            return self._generate_simulated_prices(symbol, days, end_date or datetime.now())
+
+        try:
+            data = self.coingecko.get_historical_data(coin_id, days=days)
+            raw_prices = data.get("prices", [])
+        except Exception as e:
+            logger.warning(f"Error fetching historical data for {symbol}: {e}")
+            raw_prices = []
+
+        if not raw_prices:
+            logger.warning(f"No historical data returned for {symbol} - using simulated data")
+            return self._generate_simulated_prices(symbol, days, end_date or datetime.now())
+
+        # CoinGecko returns hourly (or finer) granularity depending on range - keep
+        # one sample (the last seen that day) per calendar date to get daily prices
+        by_date = {}
+        for timestamp_ms, price in raw_prices:
+            dt = datetime.fromtimestamp(timestamp_ms / 1000)
+            by_date[dt.date()] = (dt, price)
+
+        prices = sorted(by_date.values(), key=lambda x: x[0])
+        logger.info(
+            f"Fetched {len(prices)} real daily price points for {symbol} "
+            f"({prices[0][0].date()} to {prices[-1][0].date()})"
+        )
+        return prices
     
     def _generate_simulated_prices(
         self,

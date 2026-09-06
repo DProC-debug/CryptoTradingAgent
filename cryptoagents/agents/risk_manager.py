@@ -110,9 +110,6 @@ class RiskManager:
                 loss_pct = (risk_amount / trade_decision.entry_price) * 100
                 gain_pct = (reward_amount / trade_decision.entry_price) * 100
 
-            # Calculate position size in dollars
-            position_value = self.portfolio_value * trade_decision.position_size
-            
             # Calculate max portfolio loss from this trade
             if risk_amount:
                 max_portfolio_loss = (risk_amount * trade_decision.position_size) / self.portfolio_value
@@ -446,7 +443,6 @@ class RiskManager:
         
         for pos, price in zip(positions, prices):
             stop_loss = pos.get("stop_loss", price * 0.95)
-            position_value = pos.get("size", 0) * price
             loss_per_unit = price - stop_loss
             loss_amount = loss_per_unit * pos.get("size", 0)
             total_at_risk += max(0, loss_amount)

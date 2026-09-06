@@ -301,6 +301,7 @@ class NansenPerpTrader:
                 leverage = int(leverage_field.get("value", 1)) if isinstance(leverage_field, dict) else int(float(leverage_field or 1))
                 margin_used = float(pos.get("marginUsed", 0) or 0)
                 unrealized_pnl = float(pos.get("unrealizedPnl", 0) or 0)
+                funding_paid = float((pos.get("cumFunding") or {}).get("sinceOpen", 0) or 0)
 
                 # Prefer Hyperliquid's own returnOnEquity (return on margin) - pnl/notional
                 # understates real P&L% by roughly `leverage`x and would make TP/SL never fire.
@@ -324,6 +325,7 @@ class NansenPerpTrader:
                     unrealized_pnl_percentage=pnl_pct,
                     entry_time=datetime.now(),
                     status="open",
+                    funding_paid=funding_paid,
                 ))
 
             return open_positions

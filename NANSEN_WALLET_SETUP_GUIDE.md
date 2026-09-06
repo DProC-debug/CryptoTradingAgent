@@ -548,9 +548,4 @@ Before your agent can execute trades:
 - **Nansen API Docs**: https://docs.nansen.ai/
 - **Hyperliquid Integration**: See `HYPERLIQUID_INTEGRATION.md`
 - **Quick Approval**: See `APPROVAL_QUICK_START.md`
-- **Test Files**: 
-  - `test_nansen_defi.py` - API endpoint testing
-  - `test_execute_variants.py` - Execute endpoint variations
-  - `probe_nansen_prepare.py` - Order preparation
-  - `debug_signing.py` - EIP-712 signature debugging
 

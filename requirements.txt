@@ -1,8 +1,6 @@
 # Core dependencies
 langchain-core>=0.3.81
 langchain-openai>=0.3.23
-langgraph>=0.4.8
-langgraph-checkpoint-sqlite>=2.0.0
 
 # Data processing
 pandas>=2.3.0
@@ -14,23 +12,10 @@ requests>=2.32.4
 
 # Configuration
 python-dotenv>=1.0.0
-pydantic>=2.5.0
 
 # UI & Output
 rich>=14.0.0
 typer>=0.21.0
-
-# Technical analysis
-ta-lib>=0.4.28
-stockstats>=0.6.5
-
-# Trading
-ccxt>=4.0.0
-
-# Utilities
-tqdm>=4.67.1
-setuptools>=80.9.0
-typing-extensions>=4.14.0
 
 # Development (optional)
 ruff>=0.15
