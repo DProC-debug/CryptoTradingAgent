@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from cryptoagents.graph.trading_graph import CryptoTradingGraph
 from cryptoagents.utilities.coin_selector import CoinSelector
 from cryptoagents.dataflows.coingecko_api import CoinGeckoAPI
+from cryptoagents.dataflows.nansen_api import NansenAPI
 from cryptoagents.exchanges.hyperliquid_trader import HyperliquidTrader
 from cryptoagents.exchanges.nansen_perp_trader import NansenPerpTrader
 
@@ -113,6 +114,7 @@ class AutonomousTrader:
         self.slippage = float(os.getenv("HYPERLIQUID_SLIPPAGE", "0.03"))
         self.order_type = os.getenv("HYPERLIQUID_ORDER_TYPE", "market")
         self.coin_selection_weight = os.getenv("HYPERLIQUID_COIN_SELECTION_WEIGHT", "liquidity")
+        self.coins_per_cycle = int(os.getenv("HYPERLIQUID_COINS_PER_CYCLE", "5"))
         self.exclude_coins = [
             s.strip().upper()
             for s in os.getenv("HYPERLIQUID_EXCLUDE_COINS", "BTC,ETH,USDT,USDC,BUSD,DAI").split(",")
@@ -135,8 +137,11 @@ class AutonomousTrader:
         
         # Initialize APIs
         logger.info("[INIT] Initializing APIs...")
-        self.coingecko_api = CoinGeckoAPI()
-        self.coin_selector = CoinSelector(self.coingecko_api, exclude_symbols=self.exclude_coins)
+        self.coingecko_api = CoinGeckoAPI(api_key=os.getenv("COINGECKO_API_KEY") or None)
+        # NansenAPI() raises if given an empty key, so only construct it when one is actually set;
+        # CoinSelector falls back to liquidity weighting if nansen_api is None
+        coin_selector_nansen = NansenAPI(self.nansen_api_key) if self.nansen_api_key else None
+        self.coin_selector = CoinSelector(self.coingecko_api, exclude_symbols=self.exclude_coins, nansen_api=coin_selector_nansen)
         self.trading_graph = CryptoTradingGraph(debug=False)
         self.hyperliquid_trader = None
 
@@ -339,10 +344,10 @@ class AutonomousTrader:
                 return
 
             # Step 5: Select a batch of coins for the cycle
-            logger.info("\n[STEP 1] Selecting 5 altcoins for batch analysis...")
+            logger.info(f"\n[STEP 1] Selecting {self.coins_per_cycle} altcoins for batch analysis...")
             market_data = self.coingecko_api.get_market_data(per_page=250, page=1)
             candidate_coins = await self.coin_selector.select_n_random_coins(
-                n=5, market_data=market_data, weights=self.coin_selection_weight
+                n=self.coins_per_cycle, market_data=market_data, weights=self.coin_selection_weight
             )
             
             if not candidate_coins:
@@ -412,7 +417,7 @@ class AutonomousTrader:
             # Step 7: Make trading decision for the batch
             logger.info(f"\n[STEP 3] Evaluating batch results...")
             if not actionable_trades:
-                logger.info(f"[SKIP] No actionable BUY/SELL signals in this 5-coin batch")
+                logger.info(f"[SKIP] No actionable BUY/SELL signals in this {self.coins_per_cycle}-coin batch")
                 logger.info(f"   Waiting {self.execution_interval_minutes} minutes before next cycle")
                 return
 
@@ -718,12 +723,24 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Force UTF-8 on stdout/stderr so emoji in log messages don't crash the console handler
+    # on Windows, where the default console codepage usually can't encode them
+    import sys as _sys
+    for _stream in (_sys.stdout, _sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
+
     # Setup logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler('trading_loop.log'),
+            # encoding='utf-8' - without it, FileHandler falls back to the system codepage on
+            # Windows (rarely UTF-8), so emoji in log messages raise UnicodeEncodeError and
+            # that log line silently never gets written
+            logging.FileHandler('trading_loop.log', encoding='utf-8'),
             logging.StreamHandler()
         ]
     )

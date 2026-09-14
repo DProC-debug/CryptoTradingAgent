@@ -110,6 +110,80 @@ class NansenAPI:
             logger.error(f"Error fetching position intelligence for {token_symbol}: {e}")
             return {}
 
+    def get_smart_money_netflow(
+        self,
+        chains=None,
+        timeframe: str = "24h",
+        limit: int = 250,
+        min_trader_count: int = 3,
+    ) -> list:
+        """Get tokens ranked by Smart Money net accumulation/distribution
+
+        Net flow = Smart Money DEX buys/sells plus CEX withdrawals/deposits for a token.
+        Positive = smart money is net accumulating; negative = net distributing.
+        API reference: https://docs.nansen.ai/api/smart-money/netflows
+
+        Args:
+            chains: Chains to include (default: ["all"])
+            timeframe: Which net-flow window to sort by - '1h', '24h', '7d', or '30d'
+            limit: Max results (per_page, capped at 1000 by the API)
+            min_trader_count: Minimum distinct smart money wallets behind the flow, so one
+                whale's move isn't mistaken for consensus accumulation
+
+        Returns:
+            List of dicts (token_symbol, chain, net_flow_<timeframe>_usd, trader_count, ...),
+            sorted by that timeframe's net flow descending (heaviest accumulation first).
+            Empty list on any error - callers should fail open, not block on this.
+        """
+        field = f"net_flow_{timeframe}_usd"
+        payload = {
+            "chains": chains or ["all"],
+            "filters": {
+                "include_stablecoins": False,
+                "include_native_tokens": False,
+                "trader_count": {"min": min_trader_count},
+            },
+            "order_by": [{"field": field, "direction": "DESC"}],
+            "pagination": {"page": 1, "per_page": min(limit, 1000)},
+        }
+        try:
+            result = self._post("smart-money/netflow", payload)
+            return result.get("data", [])
+        except Exception as e:
+            logger.error(f"Error fetching smart money netflow: {e}")
+            return []
+
+    def get_token_flow_intelligence(self, chain: str, token_address: str, timeframe: str = "1d") -> dict:
+        """Get wallet-cohort flow breakdown for a specific on-chain token: net USD flow
+        into/out of exchange wallets, whales, smart traders, public figures, and fresh wallets.
+
+        This is real on-chain spot activity, distinct from get_token_position_intelligence
+        (which is Hyperliquid perp derivatives positioning by ticker) - it needs an actual
+        contract address + chain, not a ticker. Use CoinGeckoAPI.resolve_chain_and_address()
+        to get those from a symbol.
+        API reference: https://docs.nansen.ai/api/token-god-mode/flow-intelligence
+
+        Args:
+            chain: Nansen chain name (e.g. 'ethereum', 'arbitrum', 'base', 'solana')
+            token_address: Token contract address on that chain
+            timeframe: '5m', '1h', '6h', '12h', '1d', or '7d'
+
+        Returns:
+            Dict with exchange/whale/smart_trader/public_figure/fresh_wallets net_flow_usd,
+            avg_flow_usd, and wallet_count fields, or {} if unavailable/on any error
+        """
+        try:
+            result = self._post("tgm/flow-intelligence", {
+                "chain": chain,
+                "token_address": token_address,
+                "timeframe": timeframe,
+            })
+            data = result.get("data", [])
+            return data[0] if data else {}
+        except Exception as e:
+            logger.error(f"Error fetching flow intelligence for {token_address} on {chain}: {e}")
+            return {}
+
     def get_address_portfolio(
         self,
         address: str,

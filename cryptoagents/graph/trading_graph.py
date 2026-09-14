@@ -105,7 +105,7 @@ class CryptoTradingGraph:
             raise
 
         # Initialize specialized analysts
-        self.blockchain_analyst = BlockchainAnalyst(self.nansen, self.deep_llm)
+        self.blockchain_analyst = BlockchainAnalyst(self.nansen, coingecko_api=self.coingecko, llm_client=self.deep_llm)
         self.sentiment_analyst = SentimentAnalyst(self.deep_llm)
         self.technical_analyst = TechnicalAnalyst(self.coingecko, self.quick_llm)
         self.macro_analyst = MacroAnalyst(self.coingecko, self.deep_llm)

@@ -2,7 +2,7 @@
 
 import logging
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import requests
 
@@ -28,6 +28,34 @@ class CoinGeckoAPI:
         "LTC": "litecoin",
         "BCH": "bitcoin-cash",
     }
+
+    # CoinGecko platform id -> Nansen chain name (only chains Nansen's flow-intelligence
+    # endpoint actually supports; naming differs between the two APIs for several chains)
+    PLATFORM_TO_NANSEN_CHAIN = {
+        "ethereum": "ethereum",
+        "solana": "solana",
+        "base": "base",
+        "arbitrum-one": "arbitrum",
+        "optimistic-ethereum": "optimism",
+        "polygon-pos": "polygon",
+        "binance-smart-chain": "bnb",
+        "avalanche": "avalanche",
+        "near-protocol": "near",
+        "the-open-network": "ton",
+        "tron": "tron",
+        "sui": "sui",
+        "starknet": "starknet",
+        "linea": "linea",
+        "mantle": "mantle",
+        "sonic": "sonic",
+        "sei-network": "sei",
+    }
+    # Preference order when a token exists on multiple Nansen-supported chains (roughly
+    # highest-liquidity/most-canonical first)
+    CHAIN_PREFERENCE = [
+        "ethereum", "solana", "base", "arbitrum", "optimism",
+        "polygon", "bnb", "avalanche",
+    ]
 
     def __init__(self, api_key: Optional[str] = None):
         """Initialize CoinGecko API client
@@ -66,7 +94,11 @@ class CoinGeckoAPI:
 
 
         headers = {"User-Agent": "CryptoTradingAgents/0.1.0"}
-        
+        if self.api_key:
+            # CoinGecko "Demo" (free-tier-with-key) plan - sent as a header on api.coingecko.com,
+            # not the pro-api.coingecko.com host or query-param scheme the Pro plan uses
+            headers["x-cg-demo-api-key"] = self.api_key
+
         # Check cache first
         cache_key = f"{endpoint}:{sorted(params.items())}"
         if cache_key in self.cache:
@@ -303,6 +335,41 @@ class CoinGeckoAPI:
         if results:
             return results[0]["id"]
         return None
+
+    def resolve_chain_and_address(self, symbol: str) -> Optional[Tuple[str, str]]:
+        """Resolve a ticker to a (nansen_chain, contract_address) pair for on-chain flow
+        lookups (e.g. NansenAPI.get_token_flow_intelligence).
+
+        Args:
+            symbol: Crypto symbol (e.g. 'ETHFI')
+
+        Returns:
+            (chain, address) tuple, or None if the coin can't be resolved or none of its
+            platforms are chains Nansen supports - callers should treat this as "flow
+            intelligence unavailable" and degrade gracefully, not as an error.
+        """
+        coin_id = self.resolve_coin_id(symbol)
+        if not coin_id:
+            return None
+
+        details = self.get_coin_details(coin_id)
+        platforms = details.get("platforms") or {}
+
+        available = {
+            self.PLATFORM_TO_NANSEN_CHAIN[platform]: address
+            for platform, address in platforms.items()
+            if address and platform in self.PLATFORM_TO_NANSEN_CHAIN
+        }
+        if not available:
+            return None
+
+        for chain in self.CHAIN_PREFERENCE:
+            if chain in available:
+                return chain, available[chain]
+
+        # Fall back to whatever's available if none of the preferred chains matched
+        chain = next(iter(available))
+        return chain, available[chain]
 
     def get_crypto_by_symbol(self, symbol: str, vs_currency: str = "usd") -> dict:
         """Get crypto data by symbol
