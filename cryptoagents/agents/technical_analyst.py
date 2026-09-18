@@ -60,6 +60,10 @@ class TechnicalAnalyst(BaseAnalyst):
                 logger.warning("No LLM client available, using fallback")
                 return self._create_no_data_result()
 
+            history_note = ""
+            if additional_context and additional_context.get("recent_loss_note"):
+                history_note = additional_context["recent_loss_note"] + "\n\n"
+
             prompt = f"""Analyze the technical indicators for {crypto_symbol} and provide a trading signal.
 
 Technical Indicators:
@@ -74,7 +78,7 @@ Market Context:
 - Volume (24h): ${market_data.get('volume_24h', 'N/A')}
 - Market Cap: ${market_data.get('market_cap', 'N/A')}
 
-Based on technical analysis, provide your trading signal:
+{history_note}Based on technical analysis, provide your trading signal:
 SIGNAL: [BUY/HOLD/SELL]
 CONFIDENCE: [0-100]
 REASONING: [Your technical analysis]"""
@@ -184,26 +188,6 @@ REASONING: [Your technical analysis]"""
             trend = "neutral"
 
         return {"rsi": rsi, "macd": macd, "price_to_bb": float(price_to_bb), "trend": trend}
-
-    def _generate_reasoning(
-        self,
-        symbol: str,
-        indicators: dict,
-        metrics: dict,
-        score: float
-    ) -> str:
-        """Generate reasoning for technical analysis"""
-        trend = indicators.get("trend", "unknown")
-        rsi = indicators.get("rsi", 0)
-        rsi_signal = metrics.get("rsi_signal", "unknown")
-        macd_signal = metrics.get("macd_signal", "unknown")
-
-        return (
-            f"Technical analysis for {symbol}: Current trend is {trend}. "
-            f"RSI ({rsi}) indicates {rsi_signal}. "
-            f"MACD is {macd_signal}. "
-            f"Price action suggests a {score:.1%} bullish bias."
-        )
 
     def _parse_llm_response(self, response: str) -> tuple:
         """Parse LLM response to extract signal, confidence, reasoning"""

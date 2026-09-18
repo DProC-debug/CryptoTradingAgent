@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from cryptoagents.graph.trading_graph import CryptoTradingGraph
 from cryptoagents.utilities.coin_selector import CoinSelector
+from cryptoagents.utilities.trade_history import TradeHistory
 from cryptoagents.dataflows.coingecko_api import CoinGeckoAPI
 from cryptoagents.dataflows.nansen_api import NansenAPI
 from cryptoagents.exchanges.hyperliquid_trader import HyperliquidTrader
@@ -105,11 +106,11 @@ class AutonomousTrader:
         self.max_daily_trades = int(os.getenv("HYPERLIQUID_MAX_DAILY_TRADES", "10"))
         self.max_daily_loss_pct = float(os.getenv("HYPERLIQUID_MAX_DAILY_LOSS_PCT", "0.05"))
         self.position_size_usd = float(os.getenv("HYPERLIQUID_POSITION_SIZE_USD", "50"))
-        # Raw price-move percentages (NOT leveraged ROE) - see monitor_positions().
-        # Defaults are asymmetric (2:1 reward:risk) and both comfortably clear the slippage
-        # tolerance below, so typical execution cost can't eat the whole target/stop.
-        self.take_profit_pct = float(os.getenv("HYPERLIQUID_TAKE_PROFIT_PCT", "0.12"))
-        self.stop_loss_pct = float(os.getenv("HYPERLIQUID_STOP_LOSS_PCT", "-0.06"))
+        # Leveraged ROE percentages (pos.unrealized_pnl_percentage), NOT raw price move -
+        # see monitor_positions(). A 30% ROE threshold at 10x leverage is only a ~3% price
+        # move, so this scales with whatever leverage confidence-scaling picks per trade.
+        self.take_profit_pct = float(os.getenv("HYPERLIQUID_TAKE_PROFIT_PCT", "0.30"))
+        self.stop_loss_pct = float(os.getenv("HYPERLIQUID_STOP_LOSS_PCT", "-0.30"))
         self.max_leverage = int(os.getenv("HYPERLIQUID_MAX_LEVERAGE", "20"))
         self.slippage = float(os.getenv("HYPERLIQUID_SLIPPAGE", "0.03"))
         self.order_type = os.getenv("HYPERLIQUID_ORDER_TYPE", "market")
@@ -150,6 +151,11 @@ class AutonomousTrader:
         # only this in-memory accounting needs persisting.
         self.state_file = os.path.join(self.trading_graph.config["data_cache_dir"], "autonomous_trader_state.json")
         self._load_state()
+
+        # Long-lived (survives restarts/day-rollover, unlike trades_today) record of
+        # STOP_LOSS/LIQUIDATED closes, so a recent loss on a coin can be surfaced back
+        # into the analysts' prompts if that coin comes up again within the lookback window.
+        self.trade_history = TradeHistory(self.trading_graph.config["data_cache_dir"])
 
         logger.info(f"[OK] AutonomousTrader initialized")
         logger.info(f"   Trading enabled: {self.trading_enabled}")
@@ -367,7 +373,11 @@ class AutonomousTrader:
                     continue
 
                 logger.info(f"\n[STEP 2] Analyzing {coin.symbol}...")
-                success, analysis = await self.trading_graph.propagate(coin.symbol, None)
+                history_note = self.trade_history.format_prompt_note(coin.symbol, hours=24)
+                additional_context = {"recent_loss_note": history_note} if history_note else None
+                if history_note:
+                    logger.info(f"   [HISTORY] Recent loss/liquidation found for {coin.symbol} - flagging to analysts")
+                success, analysis = await self.trading_graph.propagate(coin.symbol, None, additional_context=additional_context)
                 
                 if not success:
                     logger.warning(f"[WARN] Analysis failed for {coin.symbol}")
@@ -529,43 +539,61 @@ class AutonomousTrader:
             
             # Get list of open positions
             open_positions = self.hyperliquid_trader.get_open_positions()
-            
+            self._check_for_liquidations(open_positions)
+
             if not open_positions:
                 logger.info(f"[OK] No open positions")
                 return
             
-            # Thresholds are stored as fractions (e.g. 0.30); compared against raw price-move
-            # percentage, NOT leveraged ROE - otherwise the effective stop distance shrinks as
-            # leverage increases (a 30% ROE stop at 15x leverage is only a ~2% price move)
+            # Thresholds are stored as fractions (e.g. 0.30); PositionData reports pct points
+            # (e.g. 30.0) - compared against leveraged ROE (pos.unrealized_pnl_percentage),
+            # matching the original design: the stop/target scales with whatever leverage
+            # confidence-scaling picked for this trade, rather than a fixed price-move band.
             take_profit_threshold = self.take_profit_pct * 100
             stop_loss_threshold = self.stop_loss_pct * 100
 
             logger.info(f"[OK] Open positions:")
             for pos in open_positions:
-                price_move_pct = ((pos.current_price - pos.entry_price) / pos.entry_price) * 100
-                if pos.side.value == "SHORT":
-                    price_move_pct = -price_move_pct
-
-                pnl_symbol = "📈" if price_move_pct > 0 else "📉"
+                pnl_pct = pos.unrealized_pnl_percentage
+                pnl_symbol = "📈" if pnl_pct > 0 else "📉"
                 logger.info(f"   {pos.symbol}: {pos.size} units @ ${pos.entry_price:.6f}")
-                logger.info(
-                    f"      Current: ${pos.current_price:.6f} {pnl_symbol} {price_move_pct:+.2f}% price move "
-                    f"(ROE {pos.unrealized_pnl_percentage:+.2f}%)"
-                )
+                logger.info(f"      Current: ${pos.current_price:.6f} {pnl_symbol} {pnl_pct:+.2f}% ROE")
                 logger.info(f"      P&L: ${pos.unrealized_pnl:+.2f}")
                 if pos.funding_paid:
                     funding_label = "paid" if pos.funding_paid > 0 else "received"
                     logger.info(f"      Funding {funding_label} since open: ${abs(pos.funding_paid):.2f}")
 
-                if price_move_pct >= take_profit_threshold:
-                    logger.info(f"   [TP HIT] {pos.symbol} price moved +{price_move_pct:.2f}% (threshold {take_profit_threshold:.2f}%)")
+                if pnl_pct >= take_profit_threshold:
+                    logger.info(f"   [TP HIT] {pos.symbol} reached +{pnl_pct:.2f}% ROE (threshold {take_profit_threshold:.2f}%)")
                     self._close_position_now(pos, reason="TAKE_PROFIT")
-                elif price_move_pct <= stop_loss_threshold:
-                    logger.info(f"   [SL HIT] {pos.symbol} price moved {price_move_pct:.2f}% (threshold {stop_loss_threshold:.2f}%)")
+                elif pnl_pct <= stop_loss_threshold:
+                    logger.info(f"   [SL HIT] {pos.symbol} reached {pnl_pct:.2f}% ROE (threshold {stop_loss_threshold:.2f}%)")
                     self._close_position_now(pos, reason="STOP_LOSS")
         
         except Exception as e:
             logger.error(f"[ERROR] Position monitoring failed: {e}", exc_info=True)
+
+    def _check_for_liquidations(self, currently_open_positions: list):
+        """Detect positions the exchange closed on its own (liquidation) rather than
+        through our own TP/SL logic.
+
+        Called at the top of monitor_positions(), before any TP/SL closes run this cycle,
+        so any TradeRecord still marked OPEN whose symbol is no longer among the exchange's
+        actual open positions must have disappeared between cycles - i.e. liquidated (or
+        closed manually outside the bot, which is indistinguishable from here). We don't
+        know the exact exit price/pnl for a liquidation, so it's recorded as a loss without
+        a dollar figure.
+        """
+        currently_open_symbols = {p.symbol for p in currently_open_positions}
+        for trade in self.trades_today:
+            if trade.status == "OPEN" and trade.symbol not in currently_open_symbols:
+                logger.warning(
+                    f"[LIQUIDATED?] {trade.symbol} was OPEN but is no longer on the exchange - "
+                    f"marking as LIQUIDATED (or closed outside the bot)"
+                )
+                trade.status = "LIQUIDATED"
+                self._save_state()
+                self.trade_history.record_close(trade.symbol, outcome="LIQUIDATED")
 
     def _close_position_now(self, pos, reason: str):
         """Close a single open position via the exchange and reconcile the matching TradeRecord."""
@@ -603,6 +631,9 @@ class AutonomousTrader:
                 net_pnl / pos.collateral_used if pos.collateral_used else pos.unrealized_pnl_percentage / 100
             )
             self._save_state()
+            self.trade_history.record_close(
+                pos.symbol, outcome=reason, pnl=net_pnl, pnl_percentage=matching_trade.pnl_percentage
+            )
     
     async def run_trading_loop(self):
         """Main autonomous trading loop - runs indefinitely"""

@@ -59,6 +59,10 @@ class SentimentAnalyst(BaseAnalyst):
             # Format circulating supply safely
             supply_str = f"{circulating_supply:,.0f}" if circulating_supply and isinstance(circulating_supply, (int, float)) else "N/A"
 
+            history_note = ""
+            if additional_context and additional_context.get("recent_loss_note"):
+                history_note = additional_context["recent_loss_note"] + "\n\n"
+
             prompt = f"""Analyze the market sentiment for {crypto_symbol} and provide a trading signal.
 
 Market Indicators:
@@ -68,7 +72,7 @@ Market Indicators:
 - Market Cap Rank: #{market_data.get('market_cap_rank', 'N/A')}
 - Circulating Supply: {supply_str}
 
-Based on current market sentiment, momentum, and community activity, provide your analysis:
+{history_note}Based on current market sentiment, momentum, and community activity, provide your analysis:
 SIGNAL: [BUY/HOLD/SELL]
 CONFIDENCE: [0-100]
 REASONING: [Your sentiment analysis]"""
@@ -101,39 +105,6 @@ REASONING: [Your sentiment analysis]"""
                 key_metrics={"error": str(e)},
                 timestamp=datetime.utcnow().isoformat(),
             )
-
-    def _calculate_sentiment_score(self, symbol: str) -> float:
-        """Calculate sentiment score (-1.0 to 1.0)
-        
-        Args:
-            symbol: Crypto symbol
-            
-        Returns:
-            Sentiment score
-        """
-        # Simulate sentiment based on symbol
-        # In production, would aggregate real API data
-        sentiment_map = {
-            "BTC": 0.65,   # Generally bullish
-            "ETH": 0.55,   # Moderately bullish
-            "SOL": 0.45,   # Neutral-bullish
-            "DOGE": 0.35,  # Mixed
-        }
-        
-        return sentiment_map.get(symbol, 0.2)
-
-    def _get_dominant_emotion(self, sentiment: float) -> str:
-        """Get dominant emotion from sentiment score"""
-        if sentiment > 0.6:
-            return "FOMO/Euphoria"
-        elif sentiment > 0.2:
-            return "Optimism"
-        elif sentiment < -0.6:
-            return "Fear/Panic"
-        elif sentiment < -0.2:
-            return "Pessimism"
-        else:
-            return "Neutral/Mixed"
 
     def _parse_llm_response(self, response: str) -> tuple:
         """Parse LLM response to extract signal, confidence, reasoning"""

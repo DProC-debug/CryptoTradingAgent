@@ -153,9 +153,13 @@ class BlockchainAnalyst(BaseAnalyst):
                 logger.warning("No LLM client available, using fallback")
                 return self._create_no_data_result()
 
+            history_note = ""
+            if additional_context and additional_context.get("recent_loss_note"):
+                history_note = additional_context["recent_loss_note"] + "\n"
+
             prompt = f"""Analyze Hyperliquid perpetual positioning and on-chain spot flow for {crypto_symbol} and provide a trading signal.
 
-{positioning_section}
+{history_note}{positioning_section}
 {flow_section}
 {divergence_warning}
 Market Data:

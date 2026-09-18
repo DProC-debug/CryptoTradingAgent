@@ -1,0 +1,880 @@
+<title>Meeting Room</title>
+<style>
+  :root{ color-scheme: dark; }
+  *{ box-sizing:border-box; }
+  html, body{ margin:0; height:100%; background:#0b0d12; overflow:hidden; }
+  body{ font-family: ui-sans-serif, system-ui, sans-serif; }
+
+  #stage{ position:fixed; inset:0; }
+  #stage canvas{ display:block; width:100%; height:100%; cursor:grab; }
+  #stage canvas:active{ cursor:grabbing; }
+
+  #debug{
+    position:fixed; left:8px; top:8px; z-index:6; max-width:min(92vw, 520px);
+    max-height:80vh; overflow-y:auto; overscroll-behavior:contain;
+    background:rgba(10,12,18,.88); border:1px solid rgba(255,255,255,.12); border-radius:8px;
+    color:#c9cedb; font:11px/1.5 ui-monospace, "SF Mono", Consolas, monospace;
+    padding:8px 10px; white-space:pre-wrap; pointer-events:auto;
+  }
+  #debug b{ color:#fff; }
+  #debug .ok{ color:#7ee787; }
+  #debug .fail{ color:#ff7b72; }
+
+  .label{
+    position:absolute; z-index:2; transform:translate(-50%,-100%);
+    text-align:center; pointer-events:none; white-space:nowrap;
+  }
+  .label.clickable{ pointer-events:auto; cursor:pointer; }
+  .label .label-name{
+    display:block; color:#e9ebf0; font-size:12.5px; font-weight:600; letter-spacing:.02em;
+    text-shadow:0 1px 3px rgba(0,0,0,.8), 0 0 12px rgba(0,0,0,.5);
+  }
+  .label .label-role{
+    display:block; color:#aab0bd; font-size:10px; font-weight:500; letter-spacing:.03em;
+    text-shadow:0 1px 3px rgba(0,0,0,.8), 0 0 10px rgba(0,0,0,.5);
+    margin-top:1px;
+  }
+
+  #modal-overlay{
+    position:fixed; inset:0; z-index:20; display:flex; align-items:center; justify-content:center;
+    background:rgba(5,6,10,0); opacity:0; pointer-events:none;
+    transition:opacity .28s ease, background .28s ease;
+  }
+  #modal-overlay.open{ opacity:1; pointer-events:auto; background:rgba(5,6,10,.6); backdrop-filter:blur(6px); }
+
+  #modal-card{
+    position:relative; width:min(92vw,440px); max-height:82vh; overflow-y:auto;
+    border-radius:18px; padding:26px 26px 22px;
+    background:linear-gradient(160deg, rgba(26,29,42,.97), rgba(13,15,22,.97));
+    border:1px solid rgba(255,255,255,.08);
+    box-shadow:0 30px 70px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.03) inset;
+    color:#e9ebf0; font:13px/1.55 ui-sans-serif, system-ui, sans-serif;
+    transform:scale(.82) translateY(24px); opacity:0;
+    transition:transform .4s cubic-bezier(.2,.9,.25,1.35), opacity .3s ease;
+  }
+  #modal-overlay.open #modal-card{ transform:scale(1) translateY(0); opacity:1; }
+
+  #modal-card::before{
+    content:''; position:absolute; inset:-1px; border-radius:18px; padding:1px;
+    background:linear-gradient(120deg, rgba(126,231,135,.5), rgba(96,165,250,.15) 35%, rgba(126,231,135,0) 60%);
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor; mask-composite:exclude;
+    opacity:0; animation:modalGlow 2.6s ease-in-out .3s infinite;
+    pointer-events:none;
+  }
+  @keyframes modalGlow{ 0%,100%{ opacity:.15; } 50%{ opacity:.55; } }
+
+  #modal-close{
+    position:absolute; top:14px; right:14px; width:28px; height:28px; border-radius:50%;
+    border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.04); color:#c9cedb;
+    font-size:16px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center;
+    transition:background .15s ease, color .15s ease;
+  }
+  #modal-close:hover{ background:rgba(255,255,255,.1); color:#fff; }
+
+  .modal-eyebrow{ color:#8a92a3; font-size:11px; letter-spacing:.08em; text-transform:uppercase; margin:0 0 2px; }
+  .modal-title{ font-size:19px; font-weight:700; margin:0 0 18px; }
+  .modal-balance{ font-size:34px; font-weight:800; letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
+  .modal-balance-sub{ color:#8a92a3; font-size:12px; margin-top:2px; }
+  .modal-stats{ display:flex; flex-wrap:wrap; gap:18px; row-gap:12px; margin:16px 0 6px; }
+  .modal-stat b{ display:block; font-size:15px; font-variant-numeric:tabular-nums; }
+  .modal-stat span{ color:#8a92a3; font-size:11px; }
+  .modal-positions{ margin-top:14px; border-top:1px solid rgba(255,255,255,.08); padding-top:12px; }
+  .modal-positions h4{ margin:0 0 8px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#8a92a3; font-weight:600; }
+  .pos-row{ display:flex; align-items:center; justify-content:space-between; padding:7px 0; border-top:1px solid rgba(255,255,255,.05); }
+  .pos-row:first-of-type{ border-top:none; }
+  .pos-sym{ font-weight:700; }
+  .pos-side{ font-size:10.5px; padding:2px 6px; border-radius:5px; margin-left:6px; font-weight:700; letter-spacing:.02em; }
+  .pos-side.long{ background:rgba(126,231,135,.15); color:#7ee787; }
+  .pos-side.short{ background:rgba(255,123,114,.15); color:#ff7b72; }
+  .pos-side.hold{ background:rgba(255,255,255,.08); color:#c9cedb; }
+  .sentiment-bar{ display:flex; height:8px; border-radius:5px; overflow:hidden; margin:14px 0 4px; background:rgba(255,255,255,.06); }
+  .sentiment-bar span{ display:block; height:100%; }
+  .pos-pnl{ font-variant-numeric:tabular-nums; font-weight:700; }
+  .pos-pnl.pos{ color:#7ee787; }
+  .pos-pnl.neg{ color:#ff7b72; }
+  .modal-footnote{ margin-top:16px; color:#5f6672; font-size:10.5px; }
+  .modal-loading{ color:#8a92a3; padding:6px 0 2px; }
+
+  #modal-card.wide{ width:min(94vw,600px); }
+  .pos-table{ width:100%; border-collapse:collapse; margin-top:10px; font-size:11.5px; }
+  .pos-table th{
+    text-align:right; font-weight:600; color:#8a92a3; font-size:10px; letter-spacing:.05em; text-transform:uppercase;
+    padding:0 8px 6px; border-bottom:1px solid rgba(255,255,255,.08);
+  }
+  .pos-table th:first-child, .pos-table td:first-child{ text-align:left; padding-left:0; }
+  .pos-table td{ text-align:right; padding:7px 8px; border-top:1px solid rgba(255,255,255,.05); font-variant-numeric:tabular-nums; }
+  .pos-table td:last-child, .pos-table th:last-child{ padding-right:0; }
+  .pnl.pos, .funding.pos{ color:#7ee787; }
+  .pnl.neg, .funding.neg{ color:#ff7b72; }
+
+  #mute-toggle{
+    position:fixed; top:14px; right:14px; z-index:15; width:38px; height:38px; border-radius:50%;
+    border:1px solid rgba(255,255,255,.12); background:rgba(10,12,18,.7); color:#e9ebf0;
+    font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+    transition:background .15s ease, opacity .15s ease; opacity:.85;
+  }
+  #mute-toggle:hover{ background:rgba(255,255,255,.12); opacity:1; }
+  #mute-toggle.muted{ color:#5f6672; }
+
+  #office-heading{
+    position:fixed; top:16px; left:50%; transform:translateX(-50%); z-index:3;
+    margin:0; color:#e9ebf0; font-size:15px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+    text-shadow:0 1px 4px rgba(0,0,0,.8), 0 0 14px rgba(0,0,0,.5); pointer-events:none;
+  }
+
+  #loop-toggle-btn{
+    position:fixed; bottom:18px; left:50%; transform:translateX(-50%); z-index:15;
+    padding:11px 22px; border-radius:999px; border:1px solid rgba(255,255,255,.14);
+    background:rgba(10,12,18,.8); color:#e9ebf0; font:600 13px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing:.02em; cursor:pointer; display:flex; align-items:center; gap:8px;
+    transition:background .15s ease, border-color .15s ease;
+  }
+  #loop-toggle-btn:hover{ background:rgba(255,255,255,.1); }
+  #loop-toggle-btn .dot{ width:8px; height:8px; border-radius:50%; background:#5f6672; transition:background .2s ease; }
+  #loop-toggle-btn.running .dot{ background:#7ee787; box-shadow:0 0 8px rgba(126,231,135,.7); animation:dotPulse 1.6s ease-in-out infinite; }
+  @keyframes dotPulse{ 0%,100%{ opacity:1; } 50%{ opacity:.4; } }
+</style>
+
+<div id="stage">
+  <div id="debug"><b>booting&hellip;</b></div>
+</div>
+
+<div id="modal-overlay">
+  <div id="modal-card">
+    <button id="modal-close" aria-label="Close">&times;</button>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<button id="mute-toggle" aria-label="Toggle background music" title="Toggle background music">&#9834;</button>
+<audio id="bgm" loop preload="auto">
+  <source src="audio/background-music.mp3" type="audio/mpeg">
+</audio>
+
+<h1 id="office-heading">Welcome to the Office</h1>
+
+<button id="loop-toggle-btn"><span class="dot"></span><span id="loop-toggle-label">Start Agents</span></button>
+
+<script>
+  window.addEventListener('error', function(e){
+    var el = document.getElementById('debug');
+    if (el){ el.innerHTML += '\n<span class="fail">window error: ' + (e.message || e) + '</span>'; }
+  });
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="models/room.js"></script>
+<script src="models/ledger.js"></script>
+<script src="models/mood.js"></script>
+<script src="models/chart.js"></script>
+<script src="models/compass.js"></script>
+<script src="models/sage.js"></script>
+<script src="models/ace.js"></script>
+<script src="models/warden.js"></script>
+<script src="models/figs.js"></script>
+
+<script>
+(function(){
+  "use strict";
+
+  var debugEl = document.getElementById('debug');
+  var debugLines = [];
+  function log(msg, cls){
+    debugLines.push(cls ? '<span class="' + cls + '">' + msg + '</span>' : msg);
+    debugEl.innerHTML = debugLines.join('\n');
+  }
+
+  log('THREE loaded: ' + (typeof THREE !== 'undefined'), typeof THREE !== 'undefined' ? 'ok' : 'fail');
+  log('ROOM_DATA loaded: ' + (typeof window.ROOM_DATA !== 'undefined'), typeof window.ROOM_DATA !== 'undefined' ? 'ok' : 'fail');
+  log('AGENT_DATA loaded: ' + (typeof window.AGENT_DATA !== 'undefined' ? Object.keys(window.AGENT_DATA).length + ' agents' : 'false'),
+      typeof window.AGENT_DATA !== 'undefined' ? 'ok' : 'fail');
+
+  if (typeof THREE === 'undefined' || typeof window.ROOM_DATA === 'undefined'){
+    return;
+  }
+
+  // Each agent's real identity from the CryptoTradingAgents pipeline, kept as
+  // labels only. Data comes from window.AGENT_DATA (see web/animation/embed_gltf.py
+  // for how each character's .gltf was embedded as a plain JS global).
+  // Explicit seats along both sides of the long conference table (measured
+  // from the room's real geometry: table footprint spans roughly x:[-3.85,
+  // 3.15], z:[-3.79,5.56]) rather than a generic circle, so each character
+  // lands on an actual chair instead of floating near the table.
+  var AGENTS = [
+    // Ledger's role wasn't given explicitly - inferred from the backend
+    // architecture (blockchain_analyst.py, on-chain/Nansen flow analysis).
+    { id:'ledger',  name:'Ledger',  role:'On-Chain Analyst',      x:-1.05, z:-0.35, y:0.1 },
+    { id:'mood',    name:'Mood',    role:'Sentiment Analyst',     x:-1.0,  z:0.75,  y:0.1 },
+    { id:'chart',   name:'Chart',   role:'Technical Analyst',     x:-1.05, z:1.85,  y:0.1 },
+    { id:'compass', name:'Compass', role:'Macro Analyst',         x:-1.0,  z:2.95,  y:0.1 },
+    { id:'sage',    name:'Sage',    role:'Fundamental Analyst',   x:0.95,  z:-0.35, y:0.1 },
+    { id:'ace',     name:'Ace',     role:'Trader',                x:0.95,  z:0.75,  y:0.1 },
+    { id:'warden',  name:'Warden',  role:'Risk Manager',          x:0.95,  z:1.85,  y:0.1 },
+    // Figs' single animation clip is a shorter/crouched pose (measured
+    // skeleton height ~1.37m vs ~1.75m for the others), so her hips sit
+    // lower and she clips under the tabletop - lift her extra, in Y.
+    { id:'figs',    name:'Figs',    role:'Portfolio Manager',     x:0.95,  z:2.95,  y:0.18, scale:1.25 }
+  ];
+
+  // Measured from the actual files: the room is a real, sensibly-scaled
+  // space (~7m x 9.6m, floor at y=0, ceiling ~3.5m).
+  var ROOM_CENTER = new THREE.Vector3(-0.35, 0, 1.0);
+  // Box3.setFromObject() on these SkinnedMeshes measured only the bind-pose
+  // geometry x the mesh node's own (tiny, ~0.01) matrixWorld, completely
+  // missing the skeleton's real transform. The actual skeleton bone
+  // positions (measured live) show these characters are ~84 units tall at
+  // CHAR_SCALE=48, i.e. already ~1.75m (correct human height) at scale=1 -
+  // the skeleton was authored in real-world meters all along.
+  var CHAR_SCALE = 1;
+  var CHAR_ROTATE_X = 0;
+
+  var stage = document.getElementById('stage');
+
+  // Background music: browsers block audio-with-sound autoplay until the
+  // viewer has interacted with the page at least once, so try immediately
+  // and fall back to starting on the first click/key/touch anywhere.
+  var bgm = document.getElementById('bgm');
+  var muteToggle = document.getElementById('mute-toggle');
+  bgm.volume = 0.22;
+  var userMuted = false;
+  try { userMuted = localStorage.getItem('meetingRoomMuted') === '1'; } catch (e){}
+  function updateMuteIcon(){
+    muteToggle.innerHTML = userMuted ? '&#9834;&#8203;' : '&#9834;';
+    muteToggle.classList.toggle('muted', userMuted);
+  }
+  function tryPlayBgm(){
+    if (userMuted) return;
+    var p = bgm.play();
+    if (p && p.catch) p.catch(function(){ /* blocked until a user gesture */ });
+  }
+  updateMuteIcon();
+  tryPlayBgm();
+  ['pointerdown', 'keydown'].forEach(function(evt){
+    window.addEventListener(evt, function once(){
+      tryPlayBgm();
+      window.removeEventListener(evt, once);
+    });
+  });
+  muteToggle.addEventListener('click', function(){
+    userMuted = !userMuted;
+    try { localStorage.setItem('meetingRoomMuted', userMuted ? '1' : '0'); } catch (e){}
+    updateMuteIcon();
+    if (userMuted) bgm.pause(); else tryPlayBgm();
+  });
+
+  // Start/Stop only toggles a shared "desired state" flag in the artifact's
+  // db - a static published page has no way to launch or stop a process on
+  // anyone's machine. A running Claude Code /loop checks this flag each time
+  // it wakes and only refreshes the portfolio/logs snapshots while enabled.
+  var loopToggleBtn = document.getElementById('loop-toggle-btn');
+  var loopToggleLabel = document.getElementById('loop-toggle-label');
+  var loopDesiredEnabled = false;
+  var dbNamespace = (typeof window.claude !== 'undefined' && window.claude.use) ? window.claude.use('db') : Promise.resolve(null);
+
+  function setLoopButtonState(enabled){
+    loopDesiredEnabled = enabled;
+    loopToggleBtn.classList.toggle('running', enabled);
+    loopToggleLabel.textContent = enabled ? 'Agents Running' : 'Start Agents';
+  }
+
+  dbNamespace.then(function(db){
+    if (!db) return;
+    db.doc('control/loop').onSnapshot(function(snap){
+      var data = snap.exists ? snap.data() : null;
+      setLoopButtonState(!!(data && data.enabled));
+    }, function(){ /* leave button in its last known state */ });
+
+    loopToggleBtn.addEventListener('click', function(){
+      db.doc('control/loop').set({
+        enabled: !loopDesiredEnabled,
+        updatedAt: new Date().toISOString()
+      });
+    });
+  });
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b0d12);
+  scene.fog = new THREE.Fog(0x0b0d12, 10, 20);
+
+  // Elevated view from the near end of the table looking down its length,
+  // matching the user-provided reference framing (estimated, not measured -
+  // expect to nudge via CAMERA_START_POS/CAMERA_START_TARGET).
+  var CAMERA_START_POS = new THREE.Vector3(-2.1, 3.3, -3.8);
+  var CAMERA_START_TARGET = new THREE.Vector3(0.0, 1.0, 2.3);
+
+  var camera = new THREE.PerspectiveCamera(50, stage.clientWidth / stage.clientHeight, 0.1, 100);
+  camera.position.copy(CAMERA_START_POS);
+  camera.lookAt(CAMERA_START_TARGET);
+
+  var renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(stage.clientWidth, stage.clientHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  // Reflective PBR surfaces (floor, chairs, table) were blowing out to pure
+  // white under NoToneMapping (the default) - ACES compresses highlights
+  // instead of clipping them, on top of just lowering raw light intensity.
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.85;
+  stage.appendChild(renderer.domElement);
+
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.target.copy(CAMERA_START_TARGET);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 2;
+  controls.maxDistance = 12;
+  controls.maxPolarAngle = Math.PI * 0.49;
+  controls.update();
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+  var key = new THREE.DirectionalLight(0xfff2df, 0.8);
+  key.position.set(ROOM_CENTER.x + 3, 5, ROOM_CENTER.z + 2);
+  scene.add(key);
+  var fillLight = new THREE.PointLight(0xdce8ff, 4, 14, 2);
+  fillLight.position.set(ROOM_CENTER.x - 2, 2.6, ROOM_CENTER.z - 2);
+  scene.add(fillLight);
+
+  window.addEventListener('resize', function(){
+    camera.aspect = stage.clientWidth / stage.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(stage.clientWidth, stage.clientHeight);
+  });
+
+  // GLTFLoader auto-selects THREE.ImageBitmapLoader for textures whenever
+  // createImageBitmap() exists (i.e. every non-Firefox browser), and that
+  // loader always calls fetch() - even for embedded data: URIs, which this
+  // sandbox blocks. Hiding createImageBitmap forces the TextureLoader/
+  // ImageLoader fallback instead, which sets a plain <img>.src and never
+  // touches fetch()/XHR at all.
+  try { window.createImageBitmap = undefined; } catch (e){}
+
+  // No fetch()/XHR at all: every model's JSON is already in memory (loaded
+  // as a plain <script src> global), so we hand it to GLTFLoader.parse()
+  // directly instead of GLTFLoader.load(url).
+  var loader = new THREE.GLTFLoader();
+  function parseModel(data, onLoad, onError){
+    loader.parse(JSON.stringify(data), '', onLoad, onError);
+  }
+
+  var mixers = [];
+  var labelEls = {};
+  var labelTargets = {};
+
+  AGENTS.forEach(function(a){
+    var el = document.createElement('div');
+    el.className = 'label';
+    var nameEl = document.createElement('span');
+    nameEl.className = 'label-name';
+    nameEl.textContent = a.name;
+    el.appendChild(nameEl);
+    if (a.role){
+      var roleEl = document.createElement('span');
+      roleEl.className = 'label-role';
+      roleEl.textContent = a.role;
+      el.appendChild(roleEl);
+    }
+    stage.appendChild(el);
+    labelEls[a.id] = el;
+  });
+
+  // Raycasting a SkinnedMesh in three.js tests its static bind-pose geometry
+  // (the tiny, near-origin footprint from the earlier Box3 measurements),
+  // NOT the visually-skinned pose - so clicks on the actual character almost
+  // never hit. An invisible proxy box at the seat (still raycast-testable
+  // even with .visible = false, since Raycaster ignores visibility) sidesteps
+  // that entirely.
+  var hitboxes = [];
+  AGENTS.forEach(function(a){
+    var hitbox = new THREE.Mesh(
+      new THREE.BoxGeometry(0.7, 1.8, 0.7),
+      new THREE.MeshBasicMaterial()
+    );
+    hitbox.visible = false;
+    hitbox.position.set(a.x, (a.y || 0) + 0.9, a.z);
+    hitbox.userData.agentId = a.id;
+    scene.add(hitbox);
+    hitboxes.push(hitbox);
+  });
+
+  parseModel(window.ROOM_DATA, function(gltf){
+    scene.add(gltf.scene);
+    log('room: loaded', 'ok');
+  }, function(err){
+    log('room: FAILED - ' + (err && (err.message || err)), 'fail');
+  });
+
+  AGENTS.forEach(function(a, i){
+    var data = window.AGENT_DATA && window.AGENT_DATA[a.id];
+    if (!data){
+      log(a.name + ': no data found', 'fail');
+      return;
+    }
+    parseModel(data, function(gltf){
+      var root = gltf.scene;
+      root.position.set(a.x, a.y || 0, a.z);
+      root.scale.setScalar(CHAR_SCALE * (a.scale || 1));
+      // root.lookAt() would overwrite rotation.x entirely (it replaces the
+      // whole quaternion), which is why the earlier upright-fix rotation was
+      // silently a no-op. Compose explicitly instead: fix "which way is up"
+      // first (local X), then yaw to face straight across the table second.
+      var faceX = ROOM_CENTER.x - a.x; // +ve if seat is on the -X side, so it faces +X
+      var yaw = Math.atan2(faceX, 0);
+      var qUpright = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), CHAR_ROTATE_X);
+      var qYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+      root.quaternion.copy(qYaw).multiply(qUpright);
+      scene.add(root);
+
+      // Tag every node under root so a raycast hit can be traced back to
+      // which agent it belongs to (see the click handler below).
+      root.userData.agentId = a.id;
+      root.traverse(function(obj){ obj.userData.agentId = a.id; });
+
+      labelTargets[a.id] = root;
+
+      if (gltf.animations && gltf.animations.length){
+        var mixer = new THREE.AnimationMixer(root);
+        mixer.clipAction(gltf.animations[0]).play();
+        mixers.push(mixer);
+      }
+
+      log(a.name + ': loaded', 'ok');
+    }, function(err){
+      log(a.name + ': FAILED - ' + (err && (err.message || err)), 'fail');
+    });
+  });
+
+  // --- Click-to-inspect: each agent can own a handler that renders the
+  // modal body for it. Only Figs (portfolio balance) is wired up so far;
+  // clicking anyone else without a handler does nothing yet.
+  var AGENT_HANDLERS = {};
+
+  var modalOverlay = document.getElementById('modal-overlay');
+  var modalBody = document.getElementById('modal-body');
+  var modalCloseBtn = document.getElementById('modal-close');
+  var modalCard = document.getElementById('modal-card');
+
+  function openModal(renderFn){
+    modalBody.innerHTML = '';
+    modalCard.classList.toggle('wide', !!renderFn.wide);
+    renderFn(modalBody);
+    modalOverlay.classList.add('open');
+  }
+  function closeModal(){
+    modalOverlay.classList.remove('open');
+  }
+  modalCloseBtn.addEventListener('click', closeModal);
+  modalOverlay.addEventListener('click', function(e){
+    if (e.target === modalOverlay) closeModal();
+  });
+  window.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeModal();
+  });
+
+  function animateNumber(el, target, prefix, decimals){
+    var start = 0;
+    var duration = 900;
+    var startTime = performance.now();
+    function step(now){
+      var t = Math.min(1, (now - startTime) / duration);
+      var eased = 1 - Math.pow(1 - t, 3);
+      el.textContent = prefix + (start + (target - start) * eased).toFixed(decimals);
+      if (t < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  // Every popup reads the same live snapshot (seeded from web/export_state.py,
+  // refreshed on the same 30-minute loop) - one shared fetch instead of each
+  // handler repeating the claude.use('db') dance.
+  function fetchPortfolio(){
+    var dbUse = (typeof window.claude !== 'undefined' && window.claude.use) ? window.claude.use('db') : Promise.resolve(null);
+    return dbUse.then(function(db){
+      if (!db) return null;
+      return db.doc('portfolio/summary').get();
+    }).then(function(snap){
+      return snap && snap.exists ? snap.data() : null;
+    });
+  }
+  function sign(n){ return n >= 0 ? '+' : ''; }
+  function pnlClass(n){ return n >= 0 ? 'pos' : 'neg'; }
+  function withPortfolio(container, renderFn){
+    fetchPortfolio().then(function(data){
+      if (!data){
+        var el = container.querySelector('.modal-loading');
+        if (el) el.textContent = 'No live data available yet.';
+        return;
+      }
+      renderFn(data);
+    }).catch(function(e){
+      var el = container.querySelector('.modal-loading');
+      if (el) el.textContent = 'Failed to load: ' + (e && e.message || e);
+    });
+  }
+
+  AGENT_HANDLERS.figs = function(container){
+    container.innerHTML =
+      '<p class="modal-eyebrow">Figs &middot; Portfolio</p>' +
+      '<p class="modal-title">Live Account Snapshot</p>' +
+      '<div class="modal-loading">Loading live balance&hellip;</div>';
+
+    var dbUse = (typeof window.claude !== 'undefined' && window.claude.use) ? window.claude.use('db') : Promise.resolve(null);
+    dbUse.then(function(db){
+      if (!db) return null;
+      return db.doc('portfolio/summary').get();
+    }).then(function(snap){
+      var data = snap && snap.exists ? snap.data() : null;
+      if (!data){
+        container.querySelector('.modal-loading').textContent = 'No live data available yet.';
+        return;
+      }
+      var positions = data.positions || [];
+      var posHtml = positions.map(function(p){
+        var pnlClass = p.unrealizedPnl >= 0 ? 'pos' : 'neg';
+        var sideClass = p.side === 'LONG' ? 'long' : 'short';
+        var pnlSign = p.unrealizedPnl >= 0 ? '+' : '';
+        return '<div class="pos-row">' +
+          '<div><span class="pos-sym">' + p.symbol + '</span>' +
+          '<span class="pos-side ' + sideClass + '">' + p.side + '</span></div>' +
+          '<div class="pos-pnl ' + pnlClass + '">' + pnlSign + '$' + p.unrealizedPnl.toFixed(2) + '</div>' +
+          '</div>';
+      }).join('');
+
+      container.innerHTML =
+        '<p class="modal-eyebrow">Figs &middot; Portfolio</p>' +
+        '<p class="modal-title">Live Account Snapshot</p>' +
+        '<div class="modal-balance" id="modal-balance-num">$0.00</div>' +
+        '<div class="modal-balance-sub">Total account balance</div>' +
+        '<div class="modal-stats">' +
+        '<div class="modal-stat"><b>$' + data.freeCollateral.toFixed(2) + '</b><span>Free collateral</span></div>' +
+        '<div class="modal-stat"><b>' + positions.length + '</b><span>Open positions</span></div>' +
+        '<div class="modal-stat"><b>' + (data.cycleCount != null ? data.cycleCount : '&mdash;') + '</b><span>Cycle</span></div>' +
+        '</div>' +
+        (positions.length ? '<div class="modal-positions"><h4>Open Positions</h4>' + posHtml + '</div>' : '') +
+        '<div class="modal-footnote">as of ' + (data.exportedAt || 'unknown') + '</div>';
+
+      animateNumber(document.getElementById('modal-balance-num'), data.accountBalance, '$', 2);
+    }).catch(function(e){
+      container.querySelector('.modal-loading') && (container.querySelector('.modal-loading').textContent = 'Failed to load: ' + (e && e.message || e));
+    });
+  };
+
+  AGENT_HANDLERS.ace = function(container){
+    container.innerHTML =
+      '<p class="modal-eyebrow">Ace &middot; Trader</p>' +
+      '<p class="modal-title">Open Positions &amp; P&amp;L</p>' +
+      '<div class="modal-loading">Loading live positions&hellip;</div>';
+
+    var dbUse = (typeof window.claude !== 'undefined' && window.claude.use) ? window.claude.use('db') : Promise.resolve(null);
+    dbUse.then(function(db){
+      if (!db) return null;
+      return db.doc('portfolio/summary').get();
+    }).then(function(snap){
+      var data = snap && snap.exists ? snap.data() : null;
+      if (!data){
+        container.querySelector('.modal-loading').textContent = 'No live data available yet.';
+        return;
+      }
+      var positions = data.positions || [];
+      var totalPnl = positions.reduce(function(sum, p){ return sum + (p.unrealizedPnl || 0); }, 0);
+      var totalFunding = positions.reduce(function(sum, p){ return sum + (p.fundingPaid || 0); }, 0);
+
+      var rowsHtml = positions.map(function(p){
+        var pnlClass = p.unrealizedPnl >= 0 ? 'pos' : 'neg';
+        var fundingClass = p.fundingPaid >= 0 ? 'pos' : 'neg';
+        var sideClass = p.side === 'LONG' ? 'long' : 'short';
+        var pnlSign = p.unrealizedPnl >= 0 ? '+' : '';
+        var fundingSign = p.fundingPaid >= 0 ? '+' : '';
+        var moveSign = p.priceMovePct >= 0 ? '+' : '';
+        return '<tr>' +
+          '<td><span class="pos-sym">' + p.symbol + '</span> <span class="pos-side ' + sideClass + '">' + p.side + '</span></td>' +
+          '<td>' + p.size + '</td>' +
+          '<td>$' + p.entryPrice + '</td>' +
+          '<td>$' + p.currentPrice + ' <span class="' + (p.priceMovePct >= 0 ? 'pnl pos' : 'pnl neg') + '">(' + moveSign + p.priceMovePct.toFixed(2) + '%)</span></td>' +
+          '<td>' + p.leverage + '&times;</td>' +
+          '<td class="funding ' + fundingClass + '">' + fundingSign + '$' + p.fundingPaid.toFixed(2) + '</td>' +
+          '<td class="pnl ' + pnlClass + '">' + pnlSign + '$' + p.unrealizedPnl.toFixed(2) + '</td>' +
+          '</tr>';
+      }).join('');
+
+      var tableHtml = positions.length ?
+        '<table class="pos-table"><thead><tr>' +
+        '<th>Symbol</th><th>Size</th><th>Entry</th><th>Mark</th><th>Lev</th><th>Funding</th><th>PnL</th>' +
+        '</tr></thead><tbody>' + rowsHtml + '</tbody></table>' :
+        '<div class="modal-loading">No open positions right now.</div>';
+
+      container.innerHTML =
+        '<p class="modal-eyebrow">Ace &middot; Trader</p>' +
+        '<p class="modal-title">Open Positions &amp; P&amp;L</p>' +
+        '<div class="modal-balance" id="modal-balance-num">$0.00</div>' +
+        '<div class="modal-balance-sub">Total collateral</div>' +
+        '<div class="modal-stats">' +
+        '<div class="modal-stat"><b class="' + (totalPnl >= 0 ? 'pnl pos' : 'pnl neg') + '">' + (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toFixed(2) + '</b><span>Unrealized P&amp;L</span></div>' +
+        '<div class="modal-stat"><b class="' + (totalFunding >= 0 ? 'pnl pos' : 'pnl neg') + '">' + (totalFunding >= 0 ? '+' : '') + '$' + totalFunding.toFixed(2) + '</b><span>Funding paid</span></div>' +
+        '<div class="modal-stat"><b>' + positions.length + '</b><span>Open positions</span></div>' +
+        '</div>' +
+        tableHtml +
+        '<div class="modal-footnote">as of ' + (data.exportedAt || 'unknown') + '</div>';
+
+      animateNumber(document.getElementById('modal-balance-num'), data.accountBalance, '$', 2);
+    }).catch(function(e){
+      container.querySelector('.modal-loading') && (container.querySelector('.modal-loading').textContent = 'Failed to load: ' + (e && e.message || e));
+    });
+  };
+  AGENT_HANDLERS.ace.wide = true;
+
+  // The remaining six agents don't each have a distinct backend data feed
+  // (only the aggregate portfolio/positions/verdict-history snapshot is
+  // exported), so each view below is real, live data from that same
+  // snapshot, just computed/framed to match what that role would look at -
+  // not fabricated numbers.
+
+  AGENT_HANDLERS.chart = function(container){
+    container.innerHTML =
+      '<p class="modal-eyebrow">Chart &middot; Technical Analyst</p>' +
+      '<p class="modal-title">Recent Signals</p>' +
+      '<div class="modal-loading">Loading recent calls&hellip;</div>';
+    withPortfolio(container, function(data){
+      var verdicts = data.recentVerdicts || [];
+      var rows = verdicts.slice(0, 10).map(function(v){
+        var sideClass = v.signal === 'BUY' ? 'long' : (v.signal === 'SELL' ? 'short' : 'hold');
+        return '<div class="pos-row">' +
+          '<div><span class="pos-sym">' + v.symbol + '</span>' +
+          '<span class="pos-side ' + sideClass + '">' + v.signal + '</span></div>' +
+          '<div>' + v.confidence + '% conf &middot; score ' + v.score + '</div>' +
+          '</div>';
+      }).join('');
+      container.innerHTML =
+        '<p class="modal-eyebrow">Chart &middot; Technical Analyst</p>' +
+        '<p class="modal-title">Recent Signals</p>' +
+        (verdicts.length ? '<div class="modal-positions">' + rows + '</div>' : '<div class="modal-loading">No recent signals yet.</div>') +
+        '<div class="modal-footnote">as of ' + (data.exportedAt || 'unknown') + '</div>';
+    });
+  };
+
+  AGENT_HANDLERS.mood = function(container){
+    container.innerHTML =
+      '<p class="modal-eyebrow">Mood &middot; Sentiment Analyst</p>' +
+      '<p class="modal-title">Market Sentiment Gauge</p>' +
+      '<div class="modal-loading">Reading the room&hellip;</div>';
+    withPortfolio(container, function(data){
+      var verdicts = data.recentVerdicts || [];
+      var total = verdicts.length || 1;
+      var buy = verdicts.filter(function(v){ return v.signal === 'BUY'; }).length;
+      var sellCount = verdicts.filter(function(v){ return v.signal === 'SELL'; }).length;
+      var hold = verdicts.filter(function(v){ return v.signal === 'HOLD'; }).length;
+      var avgConf = verdicts.reduce(function(s, v){ return s + v.confidence; }, 0) / total;
+      var lean = buy > sellCount ? 'Bullish Lean' : (sellCount > buy ? 'Bearish Lean' : 'Neutral');
+      container.innerHTML =
+        '<p class="modal-eyebrow">Mood &middot; Sentiment Analyst</p>' +
+        '<p class="modal-title">Market Sentiment Gauge</p>' +
+        '<div class="modal-balance">' + lean + '</div>' +
+        '<div class="modal-balance-sub">across the last ' + verdicts.length + ' calls</div>' +
+        '<div class="sentiment-bar">' +
+        '<span style="width:' + (buy / total * 100) + '%; background:#7ee787;"></span>' +
+        '<span style="width:' + (sellCount / total * 100) + '%; background:#ff7b72;"></span>' +
+        '<span style="width:' + (hold / total * 100) + '%; background:#4b5563;"></span>' +
+        '</div>' +
+        '<div class="modal-stats">' +
+        '<div class="modal-stat"><b>' + buy + '</b><span>Buy calls</span></div>' +
+        '<div class="modal-stat"><b>' + sellCount + '</b><span>Sell calls</span></div>' +
+        '<div class="modal-stat"><b>' + hold + '</b><span>Hold calls</span></div>' +
+        '<div class="modal-stat"><b>' + avgConf.toFixed(0) + '%</b><span>Avg confidence</span></div>' +
+        '</div>' +
+        '<div class="modal-footnote">as of ' + (data.exportedAt || 'unknown') + '</div>';
+    });
+  };
+
+  AGENT_HANDLERS.compass = function(container){
+    container.innerHTML =
+      '<p class="modal-eyebrow">Compass &middot; Macro Analyst</p>' +
+      '<p class="modal-title">Directional Exposure</p>' +
+      '<div class="modal-loading">Charting exposure&hellip;</div>';
+    withPortfolio(container, function(data){
+      var positions = data.positions || [];
+      var longs = positions.filter(function(p){ return p.side === 'LONG'; });
+      var shorts = positions.filter(function(p){ return p.side === 'SHORT'; });
+      var notional = function(list){ return list.reduce(function(s, p){ return s + p.size * p.entryPrice; }, 0); };
+      var longNotional = notional(longs), shortNotional = notional(shorts);
+      var total = (longNotional + shortNotional) || 1;
+      var bias = longNotional > shortNotional ? 'Net Long' : (shortNotional > longNotional ? 'Net Short' : 'Balanced');
+      container.innerHTML =
+        '<p class="modal-eyebrow">Compass &middot; Macro Analyst</p>' +
+        '<p class="modal-title">Directional Exposure</p>' +
+        '<div class="modal-balance">' + bias + '</div>' +
+        '<div class="modal-balance-sub">$' + total.toFixed(0) + ' total notional across open positions</div>' +
+        '<div class="sentiment-bar">' +
+        '<span style="width:' + (longNotional / total * 100) + '%; background:#7ee787;"></span>' +
+        '<span style="width:' + (shortNotional / total * 100) + '%; background:#ff7b72;"></span>' +
+        '</div>' +
+        '<div class="modal-stats">' +
+        '<div class="modal-stat"><b>' + longs.length + '</b><span>Long positions</span></div>' +
+        '<div class="modal-stat"><b>' + shorts.length + '</b><span>Short positions</span></div>' +
+        '<div class="modal-stat"><b>$' + longNotional.toFixed(0) + '</b><span>Long notional</span></div>' +
+        '<div class="modal-stat"><b>$' + shortNotional.toFixed(0) + '</b><span>Short notional</span></div>' +
+        '</div>' +
+        '<div class="modal-footnote">as of ' + (data.exportedAt || 'unknown') + '</div>';
+    });
+  };
+
+  AGENT_HANDLERS.sage = function(container){
+    container.innerHTML =
+      '<p class="modal-eyebrow">Sage &middot; Fundamental Analyst</p>' +
+      '<p class="modal-title">Trading Fundamentals</p>' +
+      '<div class="modal-loading">Reviewing the fundamentals&hellip;</div>';
+    withPortfolio(container, function(data){
+      var positions = data.positions || [];
+      var todayTrades = data.todayTrades || [];
+      var totalPnl = positions.reduce(function(s, p){ return s + (p.unrealizedPnl || 0); }, 0);
+      var totalFunding = positions.reduce(function(s, p){ return s + (p.fundingPaid || 0); }, 0);
+      var tradesHtml = todayTrades.map(function(t){
+        var sideClass = t.signal === 'BUY' ? 'long' : (t.signal === 'SELL' ? 'short' : 'hold');
+        return '<div class="pos-row"><div><span class="pos-sym">' + t.symbol + '</span>' +
+          '<span class="pos-side ' + sideClass + '">' + t.signal + '</span></div>' +
+          '<div>' + (t.confidence * 100).toFixed(0) + '% conf</div></div>';
+      }).join('');
+      container.innerHTML =
+        '<p class="modal-eyebrow">Sage &middot; Fundamental Analyst</p>' +
+        '<p class="modal-title">Trading Fundamentals</p>' +
+        '<div class="modal-balance">Cycle #' + (data.cycleCount != null ? data.cycleCount : '&mdash;') + '</div>' +
+        '<div class="modal-balance-sub">trading cycles completed since last restart</div>' +
+        '<div class="modal-stats">' +
+        '<div class="modal-stat"><b>' + todayTrades.length + '</b><span>Trades today</span></div>' +
+        '<div class="modal-stat"><b class="pnl ' + pnlClass(totalPnl) + '">' + sign(totalPnl) + '$' + totalPnl.toFixed(2) + '</b><span>Unrealized P&amp;L</span></div>' +
+        '<div class="modal-stat"><b class="pnl ' + pnlClass(totalFunding) + '">' + sign(totalFunding) + '$' + totalFunding.toFixed(2) + '</b><span>Funding paid</span></div>' +
+        '</div>' +
+        (todayTrades.length ? '<div class="modal-positions"><h4>Today&rsquo;s Trades</h4>' + tradesHtml + '</div>' : '') +
+        '<div class="modal-footnote">as of ' + (data.exportedAt || 'unknown') + '</div>';
+    });
+  };
+
+  AGENT_HANDLERS.warden = function(container){
+    container.innerHTML =
+      '<p class="modal-eyebrow">Warden &middot; Risk Manager</p>' +
+      '<p class="modal-title">Risk Controls</p>' +
+      '<div class="modal-loading">Checking the guardrails&hellip;</div>';
+    withPortfolio(container, function(data){
+      // Static configured limits, from .env (HYPERLIQUID_MAX_LEVERAGE etc.) -
+      // these are configuration, not part of the live snapshot.
+      var MAX_DAILY_LOSS_PCT = 5;
+      var MAX_LEVERAGE = 20;
+      var MAX_POSITIONS_PER_CATEGORY = 3;
+      var BASE_POSITION_SIZE_USD = 1000;
+
+      var positions = data.positions || [];
+      var totalPnl = positions.reduce(function(s, p){ return s + (p.unrealizedPnl || 0); }, 0);
+      var dailyLossLimitUsd = data.accountBalance * (MAX_DAILY_LOSS_PCT / 100);
+      var lossUsedPct = dailyLossLimitUsd > 0 ? Math.min(100, Math.max(0, -totalPnl) / dailyLossLimitUsd * 100) : 0;
+      var maxLevInUse = positions.reduce(function(m, p){ return Math.max(m, p.leverage || 0); }, 0);
+      var statusOk = lossUsedPct < 80;
+
+      container.innerHTML =
+        '<p class="modal-eyebrow">Warden &middot; Risk Manager</p>' +
+        '<p class="modal-title">Risk Controls</p>' +
+        '<div class="modal-balance pnl ' + (statusOk ? 'pos' : 'neg') + '">' + (statusOk ? 'Within Limits' : 'Near Limit') + '</div>' +
+        '<div class="modal-balance-sub">' + lossUsedPct.toFixed(0) + '% of daily loss budget used</div>' +
+        '<div class="sentiment-bar"><span style="width:' + lossUsedPct + '%; background:' + (statusOk ? '#7ee787' : '#ff7b72') + ';"></span></div>' +
+        '<div class="modal-stats">' +
+        '<div class="modal-stat"><b>' + MAX_DAILY_LOSS_PCT + '%</b><span>Daily loss limit</span></div>' +
+        '<div class="modal-stat"><b>' + MAX_LEVERAGE + '&times;</b><span>Max leverage</span></div>' +
+        '<div class="modal-stat"><b>' + MAX_POSITIONS_PER_CATEGORY + '</b><span>Max per category</span></div>' +
+        '<div class="modal-stat"><b>$' + BASE_POSITION_SIZE_USD + '</b><span>Base position size</span></div>' +
+        '</div>' +
+        '<div class="modal-stats">' +
+        '<div class="modal-stat"><b>' + maxLevInUse + '&times;</b><span>Highest leverage in use</span></div>' +
+        '<div class="modal-stat"><b>' + positions.length + '</b><span>Open positions</span></div>' +
+        '</div>' +
+        '<div class="modal-footnote">as of ' + (data.exportedAt || 'unknown') + '</div>';
+    });
+  };
+
+  AGENT_HANDLERS.ledger = function(container){
+    container.innerHTML =
+      '<p class="modal-eyebrow">Ledger &middot; On-Chain Analyst</p>' +
+      '<p class="modal-title">On-Chain Funding Ledger</p>' +
+      '<div class="modal-loading">Reading the ledger&hellip;</div>';
+    withPortfolio(container, function(data){
+      var positions = data.positions || [];
+      var totalFunding = positions.reduce(function(s, p){ return s + (p.fundingPaid || 0); }, 0);
+      var rows = positions.map(function(p){
+        return '<div class="pos-row"><div><span class="pos-sym">' + p.symbol + '</span></div>' +
+          '<div class="pos-pnl ' + pnlClass(p.fundingPaid) + '">' + sign(p.fundingPaid) + '$' + p.fundingPaid.toFixed(2) + '</div></div>';
+      }).join('');
+      container.innerHTML =
+        '<p class="modal-eyebrow">Ledger &middot; On-Chain Analyst</p>' +
+        '<p class="modal-title">On-Chain Funding Ledger</p>' +
+        '<div class="modal-balance pnl ' + pnlClass(totalFunding) + '">' + sign(totalFunding) + '$' + totalFunding.toFixed(2) + '</div>' +
+        '<div class="modal-balance-sub">net funding paid across open positions</div>' +
+        (positions.length ? '<div class="modal-positions"><h4>Per-Position Funding</h4>' + rows + '</div>' : '<div class="modal-loading">No open positions right now.</div>') +
+        '<div class="modal-footnote">as of ' + (data.exportedAt || 'unknown') + '</div>';
+    });
+  };
+
+  // Make agents with a wired-up handler clickable via their floating label
+  // (a reliable, always-on-top hit target) as well as via a raycast against
+  // their 3D mesh (feels more like "clicking on them" in the scene).
+  Object.keys(AGENT_HANDLERS).forEach(function(id){
+    var el = labelEls[id];
+    if (!el) return;
+    el.classList.add('clickable');
+    el.addEventListener('click', function(){ openModal(AGENT_HANDLERS[id]); });
+  });
+
+  var raycaster = new THREE.Raycaster();
+  var pointerDownPos = null;
+  renderer.domElement.addEventListener('pointerdown', function(e){
+    pointerDownPos = { x: e.clientX, y: e.clientY };
+  });
+  renderer.domElement.addEventListener('pointerup', function(e){
+    if (!pointerDownPos) return;
+    var moved = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
+    pointerDownPos = null;
+    if (moved > 6) return; // a drag (orbiting the camera), not a click
+
+    var rect = renderer.domElement.getBoundingClientRect();
+    var ndc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1
+    );
+    raycaster.setFromCamera(ndc, camera);
+    var hits = raycaster.intersectObjects(scene.children, true);
+    for (var i = 0; i < hits.length; i++){
+      var agentId = hits[i].object.userData.agentId;
+      if (agentId && AGENT_HANDLERS[agentId]){
+        openModal(AGENT_HANDLERS[agentId]);
+        break;
+      }
+    }
+  });
+
+  function updateLabels(){
+    for (var id in labelTargets){
+      var root = labelTargets[id];
+      var el = labelEls[id];
+      var worldPos = new THREE.Vector3();
+      root.getWorldPosition(worldPos);
+      worldPos.y += 1.7;
+      var screen = worldPos.project(camera);
+      var behind = screen.z > 1;
+      if (behind){ el.style.display = 'none'; continue; }
+      el.style.display = 'block';
+      el.style.left = ((screen.x * 0.5 + 0.5) * stage.clientWidth) + 'px';
+      el.style.top = ((1 - (screen.y * 0.5 + 0.5)) * stage.clientHeight) + 'px';
+    }
+  }
+
+  var clock = new THREE.Clock();
+  function animate(){
+    requestAnimationFrame(animate);
+    var dt = clock.getDelta();
+    mixers.forEach(function(m){ m.update(dt); });
+    controls.update();
+    updateLabels();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+})();
+</script>

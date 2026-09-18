@@ -52,6 +52,10 @@ class FundamentalAnalyst(BaseAnalyst):
 
             categories = ", ".join(key_metrics["categories"]) if key_metrics["categories"] else "N/A"
 
+            history_note = ""
+            if additional_context and additional_context.get("recent_loss_note"):
+                history_note = additional_context["recent_loss_note"] + "\n\n"
+
             prompt = f"""Analyze the fundamentals for {crypto_symbol} and provide a trading signal.
 
 Supply & Dilution (real data from CoinGecko):
@@ -67,7 +71,7 @@ Community Signals (real data from CoinGecko):
 - Categories: {categories}
 - Market Cap Rank: #{key_metrics['market_cap_rank']}
 
-Based on supply dynamics and community signals, provide your trading signal:
+{history_note}Based on supply dynamics and community signals, provide your trading signal:
 SIGNAL: [BUY/HOLD/SELL]
 CONFIDENCE: [0-100]
 REASONING: [Your fundamental analysis]"""

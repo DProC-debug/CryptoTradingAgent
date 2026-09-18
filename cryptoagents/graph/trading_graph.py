@@ -145,12 +145,14 @@ class CryptoTradingGraph:
         logger.info("[OK] Portfolio manager initialized")
         logger.info("CryptoTradingGraph initialized successfully")
 
-    async def analyze(self, crypto_symbol: str, timeframe: str = "1h") -> dict:
+    async def analyze(self, crypto_symbol: str, timeframe: str = "1h", additional_context: Optional[dict] = None) -> dict:
         """Run full analysis pipeline for a cryptocurrency
 
         Args:
             crypto_symbol: Cryptocurrency symbol (e.g., 'BTC', 'ETH')
             timeframe: Analysis timeframe
+            additional_context: Shared context (e.g. recent loss/liquidation history)
+                passed through to every analyst
 
         Returns:
             Analysis results dictionary
@@ -175,7 +177,7 @@ class CryptoTradingGraph:
             analysis_result["market_data"] = market_data
 
             # Run all analysts concurrently
-            results = await self._run_all_analysts(crypto_symbol, market_data)
+            results = await self._run_all_analysts(crypto_symbol, market_data, additional_context)
             analysis_result["analyses"] = results
 
             # Synthesize analyst results
@@ -280,22 +282,24 @@ class CryptoTradingGraph:
 
         return analysis_result
 
-    async def _run_all_analysts(self, crypto_symbol: str, market_data: dict) -> dict:
+    async def _run_all_analysts(self, crypto_symbol: str, market_data: dict, additional_context: Optional[dict] = None) -> dict:
         """Run all analyst agents concurrently
 
         Args:
             crypto_symbol: Cryptocurrency symbol
             market_data: Market data from CoinGecko
+            additional_context: Shared context (e.g. recent loss/liquidation history)
+                passed through to every analyst
 
         Returns:
             Dict with all analyst results
         """
         tasks = [
-            self.blockchain_analyst.analyze(crypto_symbol, market_data),
-            self.sentiment_analyst.analyze(crypto_symbol, market_data),
-            self.technical_analyst.analyze(crypto_symbol, market_data),
-            self.macro_analyst.analyze(crypto_symbol, market_data),
-            self.fundamental_analyst.analyze(crypto_symbol, market_data),
+            self.blockchain_analyst.analyze(crypto_symbol, market_data, additional_context),
+            self.sentiment_analyst.analyze(crypto_symbol, market_data, additional_context),
+            self.technical_analyst.analyze(crypto_symbol, market_data, additional_context),
+            self.macro_analyst.analyze(crypto_symbol, market_data, additional_context),
+            self.fundamental_analyst.analyze(crypto_symbol, market_data, additional_context),
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -380,12 +384,14 @@ class CryptoTradingGraph:
             logger.error(f"Failed to fetch market overview: {e}")
             return {}
 
-    async def propagate(self, crypto_symbol: str, date: str) -> tuple[bool, dict]:
+    async def propagate(self, crypto_symbol: str, date: str, additional_context: Optional[dict] = None) -> tuple[bool, dict]:
         """Main propagation method - full trading pipeline
 
         Args:
             crypto_symbol: Cryptocurrency symbol
             date: Analysis date
+            additional_context: Shared context (e.g. recent loss/liquidation history)
+                passed through to every analyst
 
         Returns:
             Tuple of (success, decision_dict)
@@ -393,7 +399,7 @@ class CryptoTradingGraph:
         logger.info(f"Propagating analysis for {crypto_symbol} on {date}")
 
         try:
-            result = await self.analyze(crypto_symbol)
+            result = await self.analyze(crypto_symbol, additional_context=additional_context)
             
             # Extract trader decision and risk metrics from analysis
             trade_decision = result.get("trade_decision", {})

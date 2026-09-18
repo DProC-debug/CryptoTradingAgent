@@ -63,6 +63,10 @@ class MacroAnalyst(BaseAnalyst):
                     timestamp=datetime.utcnow().isoformat(),
                 )
 
+            history_note = ""
+            if additional_context and additional_context.get("recent_loss_note"):
+                history_note = additional_context["recent_loss_note"] + "\n\n"
+
             prompt = f"""Analyze the macro market conditions for {crypto_symbol} and provide a trading signal.
 
 Macro Indicators:
@@ -77,7 +81,7 @@ Crypto Context:
 - Price: ${market_data.get('current_price', 'N/A')}
 - 24h Change: {market_data.get('price_change_24h', 0)}%
 
-Based on macro market conditions and cycle analysis, provide your trading signal:
+{history_note}Based on macro market conditions and cycle analysis, provide your trading signal:
 SIGNAL: [BUY/HOLD/SELL]
 CONFIDENCE: [0-100]
 REASONING: [Your macro analysis]"""
@@ -165,25 +169,6 @@ REASONING: [Your macro analysis]"""
             return 0.5
         else:
             return 0.2
-
-    def _generate_reasoning(
-        self,
-        symbol: str,
-        metrics: dict,
-        score: float
-    ) -> str:
-        """Generate reasoning for macro analysis"""
-        dominance = metrics.get("btc_dominance", 0)
-        phase = metrics.get("market_phase", "unknown")
-        sentiment = metrics.get("overall_sentiment", "unknown")
-        altseason = metrics.get("altseason_signal", "unknown")
-
-        return (
-            f"Macro analysis for {symbol}: BTC dominance at {dominance:.1f}%. "
-            f"Market phase: {phase}. "
-            f"Overall sentiment: {sentiment}. "
-            f"Altseason probability: {altseason}."
-        )
 
     def _parse_llm_response(self, response: str) -> tuple:
         """Parse LLM response to extract signal, confidence, reasoning"""

@@ -73,3 +73,17 @@ trading_memory.md
 *.csv
 data/
 backtest_results/
+
+# Web dashboard - large source 3D/audio assets and generated build output (not source;
+# see web/animation/embed_gltf.py for how the raw .glb sources get embedded/compressed).
+# Regenerated snapshots aren't source either.
+web/animation/*.glb
+web/animation/*.bin
+web/animation/*.mp3
+web/animation/*.jpeg
+web/animation/*.jpg
+web/animation/*.png
+web/animation/embedded_v2/
+web/animation/rebuild_v3/
+web/state_export.json
+web/logs_export.json
