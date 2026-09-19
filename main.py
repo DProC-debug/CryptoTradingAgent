@@ -151,10 +151,8 @@ async def main():
     logger.info("\n" + "=" * 60)
     logger.info("Next steps:")
     logger.info("1. Review the analysis results above")
-    logger.info("2. Configure additional analysts in cryptoagents/agents/")
-    logger.info("3. Set up the researcher debate mechanism")
-    logger.info("4. Implement trader and risk management agents")
-    logger.info("5. Run backtests with cryptoagents backtest command")
+    logger.info("2. Run backtests with: python backtest_cli.py --symbol BTC --days 90")
+    logger.info("3. Run the autonomous loop with: python cli/autonomous_trader.py")
     logger.info("=" * 60)
 
 

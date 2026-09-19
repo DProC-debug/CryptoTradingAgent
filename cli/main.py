@@ -83,23 +83,6 @@ def market() -> None:
 
 
 @app.command()
-def backtest(
-    cryptos: str = typer.Argument(..., help="Cryptocurrencies to test (BTC,ETH,SOL)"),
-    start: str = typer.Option("2024-01-01", help="Start date (YYYY-MM-DD)"),
-    end: str = typer.Option("2024-12-31", help="End date (YYYY-MM-DD)"),
-    strategy: str = typer.Option("multi-agent", help="Strategy name"),
-) -> None:
-    """Run backtesting on historical data"""
-    console.print(
-        Panel.fit(
-            f"Backtesting {cryptos} from {start} to {end}",
-            title="CryptoTradingAgents",
-        )
-    )
-    console.print("\n⏳ Backtesting framework coming in v0.4.0...")
-
-
-@app.command()
 def config() -> None:
     """Show current configuration"""
     console.print(Panel.fit("Current Configuration", title="CryptoTradingAgents"))
