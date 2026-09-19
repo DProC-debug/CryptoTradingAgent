@@ -56,9 +56,33 @@ Nansen data is load-bearing at three separate points in the pipeline, not just a
 
 ## Web dashboard
 
-`web/meeting-room.html` is a real-time 3D visualization of the agent team, published as a standalone Claude Artifact — a Three.js conference room where all eight agents (Ledger, Mood, Chart, Compass, Sage, Ace, Warden, Figs — mapped respectively to the on-chain, sentiment, technical, macro, fundamental, trader, risk-manager, and portfolio-manager roles above) sit around a table, each playing their own animation. Clicking a character opens a live popup — account balance and positions, open-position P&L, sentiment gauge, directional exposure, risk-limit usage, on-chain funding ledger, and more — all backed by a real snapshot pulled from the live account via `web/export_state.py`.
+`web/meeting-room.html` is a 3D dashboard of the agent team, backed by live data from your trading account. It's a Three.js conference room where all eight agents (Ledger, Mood, Chart, Compass, Sage, Ace, Warden, Figs — mapped respectively to the on-chain, sentiment, technical, macro, fundamental, trader, risk-manager, and portfolio-manager roles above) sit around a table, each playing their own animation. Clicking a character opens a popup built from the current account snapshot:
 
-Not part of the Python package; it's a static frontend fed by periodic snapshots rather than a live server.
+| Agent | Popup shows |
+| --- | --- |
+| **Figs** (Portfolio Manager) | Total balance, free collateral, open positions |
+| **Ace** (Trader) | Total collateral, unrealized P&L, funding paid, and a per-position table (entry, mark, leverage, funding, P&L) |
+| **Chart** (Technical Analyst) | Recent BUY/SELL/HOLD signals with confidence and score |
+| **Mood** (Sentiment Analyst) | Buy/sell/hold breakdown and overall lean |
+| **Compass** (Macro Analyst) | Long vs. short notional exposure |
+| **Sage** (Fundamental Analyst) | Cycle count, today's trades, aggregate P&L and funding |
+| **Warden** (Risk Manager) | Your configured risk limits (read from `.env` into each snapshot) vs. current usage of the daily loss budget |
+| **Ledger** (On-Chain Analyst) | Net and per-position funding paid |
+
+### How the live data works
+
+`web/server.py` runs the dashboard locally with no extra dependencies. It serves the page plus a `/api/state` endpoint, and a background thread rebuilds the snapshot (`web/export_state.py`) from three real sources: your live Hyperliquid account (balance and open positions, through the same trader client the bot uses), the bot's persisted state file (today's trades, cycle count), and the tail of `autonomous_trader.log` (recent verdicts). Popups read `/api/state` when opened.
+
+- **Refresh cadence:** every `DASHBOARD_REFRESH_MINUTES` (default 5) while the page's **Start Agents** button is on. Pressing it captures a fresh snapshot immediately, then continues on the interval until you press it again. This is a periodic snapshot, not a streaming feed — each popup shows its "as of" timestamp.
+- **Read-only:** the button only controls the dashboard's data refresh. It never starts, stops, or places orders for the trading bot, which runs as its own process.
+- **Resilient:** if a refresh fails (exchange or network error), the last good snapshot keeps being served and the error is reported at `/api/loop`.
+- **Local only:** the server binds to `127.0.0.1` and rejects non-local Host headers, since the endpoint exposes live account data.
+
+```bash
+python web/server.py --open      # then press Start Agents on the page
+```
+
+The 3D models and background music aren't in the repo (they're large source assets); the server serves them from `web/models/*.js` and `web/audio/`, which you generate from your own `.glb` files with `web/animation/embed_gltf.py`. The same page can also be published as a Claude Artifact, where it reads a snapshot stored in the artifact's database instead of `/api/state` — there the data is only as fresh as the last snapshot pushed into it, since a published page can't reach your machine.
 
 ## Project structure
 
@@ -92,11 +116,12 @@ CryptoTradingAgents/
 │   │   └── historical_data.py        # Real historical price fetching
 │   └── autonomous_trading_loop.py    # AutonomousTrader - the live/simulated trading loop
 ├── cli/
-│   ├── main.py                       # Typer CLI (analyze / market / backtest / config / test)
+│   ├── main.py                       # Typer CLI (analyze / market / config / test)
 │   └── autonomous_trader.py          # Entry point for the continuous autonomous loop
 ├── web/
 │   ├── meeting-room.html             # 3D agent dashboard (Three.js)
-│   ├── export_state.py               # Pulls live balance/positions/verdicts for the dashboard
+│   ├── server.py                     # Local server: serves the page + /api/state, refreshes every 5 min
+│   ├── export_state.py               # Builds a live balance/positions/verdicts snapshot
 │   └── animation/embed_gltf.py       # Packs a .gltf + textures into one self-contained file
 ├── backtest_cli.py                   # Simple single-symbol backtest
 ├── backtest_advanced.py              # Multi-symbol backtest with more reporting
@@ -139,6 +164,9 @@ python backtest_cli.py --symbol BTC --days 90
 
 # Run the autonomous loop continuously (paper-trades unless HYPERLIQUID_TRADING_ENABLED=true)
 python cli/autonomous_trader.py
+
+# Local 3D dashboard (refreshes its data every 5 minutes once you press Start Agents)
+python web/server.py --open
 ```
 
 ## Trading Disclaimer

@@ -10,6 +10,8 @@ import json
 import os
 import re
 import sys
+from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -115,7 +117,7 @@ def export_recent_verdicts(log_file: Path, tail_lines: int, limit: int) -> list:
         return []
 
     with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()[-tail_lines:]
+        lines = list(deque(f, maxlen=tail_lines))
 
     verdicts = []
     current_symbol = None
@@ -158,20 +160,31 @@ def export_recent_verdicts(log_file: Path, tail_lines: int, limit: int) -> list:
     return verdicts[:limit]
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default=str(PROJECT_ROOT / "web" / "state_export.json"))
-    parser.add_argument("--log-lines", type=int, default=6000, help="How many lines to scan from the end of the log")
-    parser.add_argument("--history", type=int, default=20, help="Max recent verdicts to include")
-    args = parser.parse_args()
+def read_risk_config() -> dict:
+    """The bot's risk settings as it will actually read them (same env vars and defaults as
+    AutonomousTrader.__init__), so the dashboard shows real limits instead of hardcoded ones."""
+    return {
+        "maxDailyLossPct": round(float(os.getenv("HYPERLIQUID_MAX_DAILY_LOSS_PCT", "0.05")) * 100, 4),
+        "maxLeverage": int(os.getenv("HYPERLIQUID_MAX_LEVERAGE", "20")),
+        "maxPositionsPerCategory": int(os.getenv("HYPERLIQUID_MAX_POSITIONS_PER_CATEGORY", "2")),
+        "maxConcurrentPositions": int(os.getenv("HYPERLIQUID_MAX_CONCURRENT_POSITIONS", "3")),
+        "basePositionSizeUsd": float(os.getenv("HYPERLIQUID_POSITION_SIZE_USD", "50")),
+        "takeProfitRoePct": round(float(os.getenv("HYPERLIQUID_TAKE_PROFIT_PCT", "0.30")) * 100, 4),
+        "stopLossRoePct": round(float(os.getenv("HYPERLIQUID_STOP_LOSS_PCT", "-0.30")) * 100, 4),
+    }
 
-    trader = build_trader()
+
+def collect_state(trader, log_lines: int = 6000, history: int = 20) -> dict:
+    """Build one dashboard snapshot from a live trader plus the bot's local state/log files.
+    Read-only. Shared by the CLI below and by web/server.py's periodic refresh."""
     balance_info = trader.get_account_balance()
+    if balance_info.get("error"):
+        raise RuntimeError(f"Could not read account balance: {balance_info['error']}")
     positions = export_positions(trader)
     state_file = PROJECT_ROOT / "cache" / "autonomous_trader_state.json"
     today_trades = export_today_trades(state_file)
     recent_verdicts = export_recent_verdicts(
-        PROJECT_ROOT / "autonomous_trader.log", args.log_lines, args.history
+        PROJECT_ROOT / "autonomous_trader.log", log_lines, history
     )
     cycle_count = None
     if state_file.exists():
@@ -180,15 +193,29 @@ def main():
         except Exception:
             pass
 
-    payload = {
+    return {
         "accountBalance": balance_info.get("total_collateral", 0),
         "freeCollateral": balance_info.get("free_collateral", 0),
         "cycleCount": cycle_count,
         "positions": positions,
         "todayTrades": today_trades,
         "recentVerdicts": recent_verdicts,
-        "exportedAt": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+        "riskConfig": read_risk_config(),
+        "exportedAt": datetime.now().isoformat(timespec="seconds"),
     }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", default=str(PROJECT_ROOT / "web" / "state_export.json"))
+    parser.add_argument("--log-lines", type=int, default=6000, help="How many lines to scan from the end of the log")
+    parser.add_argument("--history", type=int, default=20, help="Max recent verdicts to include")
+    args = parser.parse_args()
+
+    payload = collect_state(build_trader(), args.log_lines, args.history)
+    positions = payload["positions"]
+    today_trades = payload["todayTrades"]
+    recent_verdicts = payload["recentVerdicts"]
 
     out_path = Path(args.out)
     out_path.write_text(json.dumps(payload, indent=2))

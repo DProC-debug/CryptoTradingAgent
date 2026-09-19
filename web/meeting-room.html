@@ -265,10 +265,12 @@
     if (userMuted) bgm.pause(); else tryPlayBgm();
   });
 
-  // Start/Stop only toggles a shared "desired state" flag in the artifact's
-  // db - a static published page has no way to launch or stop a process on
-  // anyone's machine. A running Claude Code /loop checks this flag each time
-  // it wakes and only refreshes the portfolio/logs snapshots while enabled.
+  // Two ways this page gets its data, chosen by where it's served from:
+  //  - Local server (python web/server.py): /api/state serves a snapshot the server refreshes
+  //    every few minutes, and Start/Stop hits /api/loop on that same server.
+  //  - Published artifact: the sandbox blocks fetch/XHR, so data comes from the artifact's db,
+  //    and Start/Stop only flips a flag there that a Claude Code /loop has to act on.
+  var IS_LOCAL_SERVER = location.protocol.indexOf('http') === 0 && /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
   var loopToggleBtn = document.getElementById('loop-toggle-btn');
   var loopToggleLabel = document.getElementById('loop-toggle-label');
   var loopDesiredEnabled = false;
@@ -278,6 +280,25 @@
     loopDesiredEnabled = enabled;
     loopToggleBtn.classList.toggle('running', enabled);
     loopToggleLabel.textContent = enabled ? 'Agents Running' : 'Start Agents';
+  }
+
+  if (IS_LOCAL_SERVER){
+    var pollLoopState = function(){
+      fetch('/api/loop', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(d){
+        setLoopButtonState(!!d.enabled);
+      }).catch(function(){ /* server briefly unreachable - keep last known state */ });
+    };
+    pollLoopState();
+    setInterval(pollLoopState, 5000);
+    loopToggleBtn.addEventListener('click', function(){
+      fetch('/api/loop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !loopDesiredEnabled })
+      }).then(function(r){ return r.json(); }).then(function(d){
+        setLoopButtonState(!!d.enabled);
+      }).catch(function(){});
+    });
   }
 
   dbNamespace.then(function(db){
@@ -486,10 +507,14 @@
     requestAnimationFrame(step);
   }
 
-  // Every popup reads the same live snapshot (seeded from web/export_state.py,
-  // refreshed on the same 30-minute loop) - one shared fetch instead of each
-  // handler repeating the claude.use('db') dance.
+  // Every popup reads the same live snapshot - one shared fetch instead of each
+  // handler repeating the data-source dance (see IS_LOCAL_SERVER above).
   function fetchPortfolio(){
+    if (IS_LOCAL_SERVER){
+      return fetch('/api/state', { cache: 'no-store' }).then(function(r){
+        return r.ok ? r.json() : null;
+      });
+    }
     var dbUse = (typeof window.claude !== 'undefined' && window.claude.use) ? window.claude.use('db') : Promise.resolve(null);
     return dbUse.then(function(db){
       if (!db) return null;
@@ -520,16 +545,7 @@
       '<p class="modal-title">Live Account Snapshot</p>' +
       '<div class="modal-loading">Loading live balance&hellip;</div>';
 
-    var dbUse = (typeof window.claude !== 'undefined' && window.claude.use) ? window.claude.use('db') : Promise.resolve(null);
-    dbUse.then(function(db){
-      if (!db) return null;
-      return db.doc('portfolio/summary').get();
-    }).then(function(snap){
-      var data = snap && snap.exists ? snap.data() : null;
-      if (!data){
-        container.querySelector('.modal-loading').textContent = 'No live data available yet.';
-        return;
-      }
+    withPortfolio(container, function(data){
       var positions = data.positions || [];
       var posHtml = positions.map(function(p){
         var pnlClass = p.unrealizedPnl >= 0 ? 'pos' : 'neg';
@@ -556,8 +572,6 @@
         '<div class="modal-footnote">as of ' + (data.exportedAt || 'unknown') + '</div>';
 
       animateNumber(document.getElementById('modal-balance-num'), data.accountBalance, '$', 2);
-    }).catch(function(e){
-      container.querySelector('.modal-loading') && (container.querySelector('.modal-loading').textContent = 'Failed to load: ' + (e && e.message || e));
     });
   };
 
@@ -567,16 +581,7 @@
       '<p class="modal-title">Open Positions &amp; P&amp;L</p>' +
       '<div class="modal-loading">Loading live positions&hellip;</div>';
 
-    var dbUse = (typeof window.claude !== 'undefined' && window.claude.use) ? window.claude.use('db') : Promise.resolve(null);
-    dbUse.then(function(db){
-      if (!db) return null;
-      return db.doc('portfolio/summary').get();
-    }).then(function(snap){
-      var data = snap && snap.exists ? snap.data() : null;
-      if (!data){
-        container.querySelector('.modal-loading').textContent = 'No live data available yet.';
-        return;
-      }
+    withPortfolio(container, function(data){
       var positions = data.positions || [];
       var totalPnl = positions.reduce(function(sum, p){ return sum + (p.unrealizedPnl || 0); }, 0);
       var totalFunding = positions.reduce(function(sum, p){ return sum + (p.fundingPaid || 0); }, 0);
@@ -619,8 +624,6 @@
         '<div class="modal-footnote">as of ' + (data.exportedAt || 'unknown') + '</div>';
 
       animateNumber(document.getElementById('modal-balance-num'), data.accountBalance, '$', 2);
-    }).catch(function(e){
-      container.querySelector('.modal-loading') && (container.querySelector('.modal-loading').textContent = 'Failed to load: ' + (e && e.message || e));
     });
   };
   AGENT_HANDLERS.ace.wide = true;
@@ -756,12 +759,13 @@
       '<p class="modal-title">Risk Controls</p>' +
       '<div class="modal-loading">Checking the guardrails&hellip;</div>';
     withPortfolio(container, function(data){
-      // Static configured limits, from .env (HYPERLIQUID_MAX_LEVERAGE etc.) -
-      // these are configuration, not part of the live snapshot.
-      var MAX_DAILY_LOSS_PCT = 5;
-      var MAX_LEVERAGE = 20;
-      var MAX_POSITIONS_PER_CATEGORY = 3;
-      var BASE_POSITION_SIZE_USD = 1000;
+      // The bot's real limits ride along in the snapshot (riskConfig, read from .env by
+      // export_state.py). The fallbacks only cover an older snapshot that predates it.
+      var cfg = data.riskConfig || {};
+      var MAX_DAILY_LOSS_PCT = cfg.maxDailyLossPct != null ? cfg.maxDailyLossPct : 5;
+      var MAX_LEVERAGE = cfg.maxLeverage != null ? cfg.maxLeverage : 20;
+      var MAX_POSITIONS_PER_CATEGORY = cfg.maxPositionsPerCategory != null ? cfg.maxPositionsPerCategory : 3;
+      var BASE_POSITION_SIZE_USD = cfg.basePositionSizeUsd != null ? cfg.basePositionSizeUsd : 1000;
 
       var positions = data.positions || [];
       var totalPnl = positions.reduce(function(s, p){ return s + (p.unrealizedPnl || 0); }, 0);

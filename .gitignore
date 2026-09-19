@@ -85,5 +85,7 @@ web/animation/*.jpg
 web/animation/*.png
 web/animation/embedded_v2/
 web/animation/rebuild_v3/
+web/models/
+web/audio/
 web/state_export.json
 web/logs_export.json
