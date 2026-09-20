@@ -193,6 +193,9 @@
       typeof window.AGENT_DATA !== 'undefined' ? 'ok' : 'fail');
 
   if (typeof THREE === 'undefined' || typeof window.ROOM_DATA === 'undefined'){
+    if (typeof window.ROOM_DATA === 'undefined'){
+      log('3D models not found. They are not distributed with this repo - add your own to web/models/ (see the README, "3D assets").', 'fail');
+    }
     return;
   }
 

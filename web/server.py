@@ -227,6 +227,11 @@ def main():
     args = parser.parse_args()
     sys.stdout.reconfigure(line_buffering=True)
 
+    if not (WEB_DIR / "models" / "room.js").is_file():
+        print("Note: no 3D models found in web/models/ - the page will show a message instead of the scene. "
+              "They aren't distributed with the repo; see the README's \"3D assets\" section. "
+              "(/api/state still works.)")
+
     loop = RefreshLoop(args.interval_minutes * 60, make_live_collector(), enabled=args.autostart)
     threading.Thread(target=loop.run, daemon=True, name="refresh-loop").start()
 

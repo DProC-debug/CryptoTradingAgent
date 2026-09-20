@@ -82,7 +82,19 @@ Nansen data is load-bearing at three separate points in the pipeline, not just a
 python web/server.py --open      # then press Start Agents on the page
 ```
 
-The 3D models and background music aren't in the repo (they're large source assets); the server serves them from `web/models/*.js` and `web/audio/`, which you generate from your own `.glb` files with `web/animation/embed_gltf.py`. The same page can also be published as a Claude Artifact, where it reads a snapshot stored in the artifact's database instead of `/api/state` — there the data is only as fresh as the last snapshot pushed into it, since a published page can't reach your machine.
+### 3D assets (not included)
+
+The characters, room, and background music the author uses are third-party assets that can't be redistributed, so they are not in this repository and there's no download for them. Without them the page can't build its scene, so the popups and Start button don't appear either — it shows a message in the debug panel, and the server prints a note at startup. The `/api/state` and `/api/loop` endpoints still work on their own.
+
+To run the full dashboard you need to supply your own models (any you have the rights to use). The page expects these files, served from `web/`:
+
+- `models/room.js` containing `window.ROOM_DATA = <glTF JSON>;`
+- `models/<name>.js` for each of `ledger`, `mood`, `chart`, `compass`, `sage`, `ace`, `warden`, `figs`, containing `window.AGENT_DATA = window.AGENT_DATA || {}; window.AGENT_DATA.<name> = <glTF JSON>;` — rigged characters with one animation clip each
+- optionally `audio/background-music.mp3`
+
+The glTF JSON must be self-contained (buffers and textures embedded as base64 data URIs). `python web/animation/embed_gltf.py <folder>` produces that from a `.gltf` and its resource files; wrap its `.json` output in the assignment above. The seat positions (`AGENTS` in `meeting-room.html`) are tuned to the author's room model, so expect to adjust them for a different one. `web/models/` and `web/audio/` are gitignored so your assets never get committed by accident.
+
+The same page can also be published as a Claude Artifact, where it reads a snapshot stored in the artifact's database instead of `/api/state` — there the data is only as fresh as the last snapshot pushed into it, since a published page can't reach your machine.
 
 ## Project structure
 
