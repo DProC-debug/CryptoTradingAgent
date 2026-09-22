@@ -781,10 +781,10 @@
         '<p class="modal-eyebrow">Warden &middot; Risk Manager</p>' +
         '<p class="modal-title">Risk Controls</p>' +
         '<div class="modal-balance pnl ' + (statusOk ? 'pos' : 'neg') + '">' + (statusOk ? 'Within Limits' : 'Near Limit') + '</div>' +
-        '<div class="modal-balance-sub">' + lossUsedPct.toFixed(0) + '% of daily loss budget used</div>' +
+        '<div class="modal-balance-sub">' + (MAX_DAILY_LOSS_PCT > 0 ? lossUsedPct.toFixed(0) + '% of daily loss budget used' : 'Daily loss circuit breaker is off') + '</div>' +
         '<div class="sentiment-bar"><span style="width:' + lossUsedPct + '%; background:' + (statusOk ? '#7ee787' : '#ff7b72') + ';"></span></div>' +
         '<div class="modal-stats">' +
-        '<div class="modal-stat"><b>' + MAX_DAILY_LOSS_PCT + '%</b><span>Daily loss limit</span></div>' +
+        '<div class="modal-stat"><b>' + (MAX_DAILY_LOSS_PCT > 0 ? MAX_DAILY_LOSS_PCT + '%' : 'Off') + '</b><span>Daily loss limit</span></div>' +
         '<div class="modal-stat"><b>' + MAX_LEVERAGE + '&times;</b><span>Max leverage</span></div>' +
         '<div class="modal-stat"><b>' + MAX_POSITIONS_PER_CATEGORY + '</b><span>Max per category</span></div>' +
         '<div class="modal-stat"><b>$' + BASE_POSITION_SIZE_USD + '</b><span>Base position size</span></div>' +

@@ -163,7 +163,16 @@ class AutonomousTrader:
         logger.info(f"   Execution interval: {self.execution_interval_minutes} minutes")
         logger.info(f"   Monitoring interval: {self.monitoring_interval_seconds} seconds")
         logger.info(f"   Position size: ${self.position_size_usd}")
-    
+        if self.max_daily_loss_pct <= 0:
+            logger.warning("   Daily loss circuit breaker: DISABLED (HYPERLIQUID_MAX_DAILY_LOSS_PCT <= 0)")
+        else:
+            logger.info(f"   Daily loss circuit breaker: halts new entries at -{self.max_daily_loss_pct:.1%} of the day's starting balance")
+            if self.max_daily_loss_pct >= 1:
+                logger.warning(
+                    "   HYPERLIQUID_MAX_DAILY_LOSS_PCT is a fraction (0.05 = 5%), not a percent - at "
+                    f"{self.max_daily_loss_pct} the breaker can never trip"
+                )
+
     def initialize_trader(self):
         """Initialize the trading backend (Nansen-routed perp API, or the official Hyperliquid SDK directly)"""
         if not self.wallet_address:
@@ -280,7 +289,13 @@ class AutonomousTrader:
         Comparing live balance to the baseline directly captures everything that actually
         moves the account - trade P&L, funding, all of it - with no risk of double-counting.
         Resets automatically at the next day rollover.
+
+        HYPERLIQUID_MAX_DAILY_LOSS_PCT <= 0 disables the breaker. Without this, 0 would mean
+        "trip whenever the day's P&L is <= 0" - the opposite of off.
         """
+        if self.max_daily_loss_pct <= 0:
+            return True
+
         balance_info = self.hyperliquid_trader.get_account_balance()
         if balance_info.get("error"):
             logger.warning(f"[WARN] Could not check daily loss limit: {balance_info.get('error')}")
@@ -301,7 +316,7 @@ class AutonomousTrader:
         if day_pnl_pct <= -self.max_daily_loss_pct:
             logger.warning(
                 f"[CIRCUIT BREAKER] Daily loss limit hit: {day_pnl_pct:+.2%} "
-                f"(limit -{self.max_daily_loss_pct:.0%}) - halting new trades until tomorrow"
+                f"(limit -{self.max_daily_loss_pct:.1%}) - halting new trades until tomorrow"
             )
             return False
 

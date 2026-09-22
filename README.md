@@ -46,7 +46,7 @@ Nansen data is load-bearing at three separate points in the pipeline, not just a
 
 ### Safety and effectiveness controls
 
-- **Daily loss circuit breaker** — halts new entries once today's account balance drops more than `HYPERLIQUID_MAX_DAILY_LOSS_PCT` below the day's starting balance (existing positions still get monitored/closed normally).
+- **Daily loss circuit breaker** — halts new entries once today's account balance drops more than `HYPERLIQUID_MAX_DAILY_LOSS_PCT` below the day's starting balance; existing positions still get monitored/closed normally. It's a fraction (`0.05` = 5%), `0` disables it, and the bot must be restarted to apply a change.
 - **Category correlation limits** — caps concurrent positions sharing a CoinGecko sector tag (e.g. "Meme", "DeFi") as a proxy for correlation, since real historical correlation data isn't available for arbitrary altcoins.
 - **Leveraged-ROE take-profit/stop-loss** — `HYPERLIQUID_TAKE_PROFIT_PCT` / `HYPERLIQUID_STOP_LOSS_PCT` are measured against a position's actual ROE (so the threshold scales correctly with whatever leverage confidence-scaling picked for that trade), checked every `HYPERLIQUID_MONITORING_INTERVAL_SECONDS`.
 - **Liquidation detection** — since Hyperliquid can liquidate a position between our polling intervals, `monitor_positions()` diffs each cycle's open positions against what we expect to still be open and flags anything that vanished on its own as liquidated.
