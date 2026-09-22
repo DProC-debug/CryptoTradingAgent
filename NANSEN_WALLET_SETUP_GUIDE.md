@@ -89,7 +89,7 @@ print(f"Wallet Address: {account.address}")
 
 1. In Nansen dashboard → Account Settings → API Keys
 2. Create new API key
-3. Copy the full key: `nsn_60821234455785999`
+3. Copy the full key: `nsn_xxxxxxxxxxxxxxxxxxxxxx`
 4. Save to `.env` as `NANSEN_API_KEY`
 
 ### Step 3: Fund Your Wallet

@@ -125,21 +125,17 @@ CryptoTradingAgents/
 │   ├── utilities/
 │   │   ├── coin_selector.py          # Random/liquidity/Smart-Money-weighted coin selection
 │   │   └── trade_history.py          # Persistent loss/liquidation memory
-│   ├── backtesting/
-│   │   ├── backtest_engine.py        # Runs the real multi-agent pipeline over real history
-│   │   └── historical_data.py        # Real historical price fetching
 │   └── autonomous_trading_loop.py    # AutonomousTrader - the live/simulated trading loop
 ├── cli/
-│   ├── main.py                       # Typer CLI (analyze / market / config / test)
-│   └── autonomous_trader.py          # Entry point for the continuous autonomous loop
+│   ├── autonomous_trader.py          # Entry point for the continuous autonomous loop
+│   ├── approve_builder_fee.py        # One-time Hyperliquid builder-fee approval (required before live trading)
+│   ├── sign_eip712.py                # Standalone EIP-712 signing helper used by the approval flow
+│   └── transfer_usdc_to_perps.py     # One-time spot -> perps USDC transfer
 ├── web/
 │   ├── meeting-room.html             # 3D agent dashboard (Three.js)
 │   ├── server.py                     # Local server: serves the page + /api/state, refreshes every 5 min
 │   ├── export_state.py               # Builds a live balance/positions/verdicts snapshot
 │   └── animation/embed_gltf.py       # Packs a .gltf + textures into one self-contained file
-├── backtest_cli.py                   # Simple single-symbol backtest
-├── backtest_advanced.py              # Multi-symbol backtest with more reporting
-├── main.py                           # Quick-start script (analyzes BTC once)
 ├── .env.example                      # Full list of configuration variables
 └── pyproject.toml
 ```
@@ -170,18 +166,14 @@ To place real orders, also set `PORTFOLIO_WALLET_HYPERLIQUID`, `PORTFOLIO_WALLET
 ### 3. Run
 
 ```bash
-# One-off analysis of a single coin
-cryptoagents analyze BTC --timeframe 1h
-
-# Backtest against real historical data
-python backtest_cli.py --symbol BTC --days 90
-
 # Run the autonomous loop continuously (paper-trades unless HYPERLIQUID_TRADING_ENABLED=true)
 python cli/autonomous_trader.py
 
 # Local 3D dashboard (refreshes its data every 5 minutes once you press Start Agents)
 python web/server.py --open
 ```
+
+Before enabling `HYPERLIQUID_TRADING_ENABLED=true`, your wallet needs a one-time Hyperliquid builder-fee approval (`python cli/approve_builder_fee.py <private_key>`) and, if funds are sitting in your Hyperliquid spot balance rather than perps, a one-time transfer (`python cli/transfer_usdc_to_perps.py`). See `NANSEN_WALLET_SETUP_GUIDE.md` and `APPROVAL_QUICK_START.md` for the full walkthrough.
 
 ## Trading Disclaimer
 
