@@ -1,10 +1,10 @@
 # CryptoTradingAgents
 
-An autonomous, multi-agent LLM crypto trading bot that trades Hyperliquid perpetuals, driven end-to-end by **Nansen on-chain and Smart Money data** — from picking which coins to look at, to how it scores them, to a live 3D dashboard of the agents themselves.
+**Submission for the Nansen buildathon.**
 
-Eight specialized agents (five analysts, a bull/bear debate, a trader, a risk manager, and a portfolio manager) run every trading cycle, backed by real safety controls: a daily-loss circuit breaker, correlation-aware position limits, crash-safe state, and a memory system that feeds a coin's own recent stop-loss/liquidation history back into its next analysis.
+Most trading bots either follow a single rigid technical rule, or hand everything to one LLM call and hope. CryptoTradingAgents instead runs eight specialized agents — five analysts, a bull/bear debate, a trader, and a risk manager, chaired by a portfolio manager — every cycle, and trades Hyperliquid perpetuals autonomously on the result. **Nansen on-chain and Smart Money data** isn't a side panel here; it's wired into three separate points in that pipeline (see below). Real safety controls back it up too: a daily-loss circuit breaker, correlation-aware position limits, crash-safe state, and a memory system that feeds a coin's own recent stop-loss/liquidation history back into its next analysis — so a coin that just got the bot liquidated doesn't get treated as a clean slate an hour later.
 
-**Status**: 🏗️ Active development — built for the Nansen buildathon.
+**Status**: Functional end-to-end — coin selection, five-agent analysis, debate, risk-adjusted sizing, and live Hyperliquid execution all run today. It's still a research project (see the disclaimer below), not an audited financial product.
 
 ## What makes this a Nansen project
 
@@ -54,7 +54,9 @@ Nansen data is load-bearing at three separate points in the pipeline, not just a
 - **Automatic stablecoin filtering** — excludes anything trading within a small band of $1 regardless of ticker, catching stablecoins a fixed exclude-list wouldn't know by name.
 - **Crash-safe state** — today's trade log, starting balance baseline, and cycle count are persisted atomically and restored on restart.
 
-## Web dashboard
+## Web dashboard (bonus, optional)
+
+Not the core deliverable — the agent pipeline above is. This is a 3D visualization layer on top of it, and it needs 3D character/room models the author can't redistribute (see [3D assets](#3d-assets-not-included) below), so a fresh clone won't show the scene without supplying your own. `/api/state` and `/api/loop` work regardless.
 
 `web/meeting-room.html` is a 3D dashboard of the agent team, backed by live data from your trading account. It's a Three.js conference room where all eight agents (Ledger, Mood, Chart, Compass, Sage, Ace, Warden, Figs — mapped respectively to the on-chain, sentiment, technical, macro, fundamental, trader, risk-manager, and portfolio-manager roles above) sit around a table, each playing their own animation. Clicking a character opens a popup built from the current account snapshot:
 
