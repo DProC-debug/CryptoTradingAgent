@@ -1,4 +1,4 @@
-# CryptoTradingAgents
+# CryptoTradingAgent
 
 **Submission for the Nansen buildathon.**
 
