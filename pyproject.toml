@@ -18,6 +18,8 @@ dependencies = [
     "typer>=0.21.0",
     "aiohttp>=3.9.0",
     "numpy>=1.24.0",
+    "hyperliquid-python-sdk>=0.20.0",
+    "eth-account>=0.13.0",
 ]
 
 [project.optional-dependencies]
