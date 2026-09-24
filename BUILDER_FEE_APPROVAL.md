@@ -71,7 +71,7 @@ curl -s -X POST "https://api.nansen.ai/api/v1/perp/approve-builder-fee" \
 echo '{"types": {...}, ...}' > payload.json
 
 # 2. Run the signing script (requires eth-account)
-python cli/sign_eip712.py YOUR_PRIVATE_KEY < payload.json
+python cli/sign_eip712.py payload.json
 ```
 
 **Option B: Using MetaMask**
@@ -137,7 +137,7 @@ When you start the agent and it detects approval is needed:
 
 2. **You sign locally** (using script, MetaMask, or Python)
    ```bash
-   python cli/sign_eip712.py YOUR_PRIVATE_KEY < payload.json
+   python cli/sign_eip712.py payload.json
    ```
 
 3. **You provide signature to agent**

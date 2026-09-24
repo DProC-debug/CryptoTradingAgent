@@ -129,7 +129,7 @@ CryptoTradingAgents/
 ├── cli/
 │   ├── autonomous_trader.py          # Entry point for the continuous autonomous loop
 │   ├── approve_builder_fee.py        # One-time Hyperliquid builder-fee approval (required before live trading)
-│   ├── sign_eip712.py                # Standalone EIP-712 signing helper used by the approval flow
+│   ├── sign_eip712.py                # Standalone EIP-712 signing helper (reads key from .env)
 │   └── transfer_usdc_to_perps.py     # One-time spot -> perps USDC transfer
 ├── web/
 │   ├── meeting-room.html             # 3D agent dashboard (Three.js)
@@ -173,7 +173,7 @@ python cli/autonomous_trader.py
 python web/server.py --open
 ```
 
-Before enabling `HYPERLIQUID_TRADING_ENABLED=true`, your wallet needs a one-time Hyperliquid builder-fee approval (`python cli/approve_builder_fee.py <private_key>`) and, if funds are sitting in your Hyperliquid spot balance rather than perps, a one-time transfer (`python cli/transfer_usdc_to_perps.py`). See `NANSEN_WALLET_SETUP_GUIDE.md` and `APPROVAL_QUICK_START.md` for the full walkthrough.
+Before enabling `HYPERLIQUID_TRADING_ENABLED=true`, your wallet needs a one-time Hyperliquid builder-fee approval (`python cli/approve_builder_fee.py`, which reads your key from `.env`; re-run it if you ever switch wallets) and, if funds are sitting in your Hyperliquid spot balance rather than perps, a one-time transfer (`python cli/transfer_usdc_to_perps.py`). See `NANSEN_WALLET_SETUP_GUIDE.md` and `APPROVAL_QUICK_START.md` for the full walkthrough.
 
 ## Trading Disclaimer
 

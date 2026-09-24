@@ -114,6 +114,7 @@ class AutonomousTrader:
         self.max_leverage = int(os.getenv("HYPERLIQUID_MAX_LEVERAGE", "20"))
         self.slippage = float(os.getenv("HYPERLIQUID_SLIPPAGE", "0.03"))
         self.order_type = os.getenv("HYPERLIQUID_ORDER_TYPE", "market")
+        self.auto_transfer_to_perps = os.getenv("HYPERLIQUID_AUTO_TRANSFER_TO_PERPS", "true").lower() == "true"
         self.coin_selection_weight = os.getenv("HYPERLIQUID_COIN_SELECTION_WEIGHT", "liquidity")
         self.coins_per_cycle = int(os.getenv("HYPERLIQUID_COINS_PER_CYCLE", "5"))
         self.exclude_coins = [
@@ -367,6 +368,8 @@ class AutonomousTrader:
             # Step 5: Select a batch of coins for the cycle
             logger.info(f"\n[STEP 1] Selecting {self.coins_per_cycle} altcoins for batch analysis...")
             market_data = self.coingecko_api.get_market_data(per_page=250, page=1)
+            if hasattr(self.hyperliquid_trader, "get_tradable_symbols"):
+                self.coin_selector.tradable_symbols = self.hyperliquid_trader.get_tradable_symbols()
             candidate_coins = await self.coin_selector.select_n_random_coins(
                 n=self.coins_per_cycle, market_data=market_data, weights=self.coin_selection_weight
             )
@@ -446,6 +449,9 @@ class AutonomousTrader:
                 logger.info(f"   Waiting {self.execution_interval_minutes} minutes before next cycle")
                 return
 
+            if self.trading_enabled and self.auto_transfer_to_perps and hasattr(self.hyperliquid_trader, "ensure_perps_margin"):
+                self.hyperliquid_trader.ensure_perps_margin()
+
             for trade_candidate in actionable_trades:
                 coin = trade_candidate["coin"]
                 signal = trade_candidate["signal"]
@@ -462,6 +468,11 @@ class AutonomousTrader:
 
                 logger.info(f"\n[STEP 4] Executing {signal} order for {coin.symbol}...")
                 leverage = min(confidence * self.max_leverage, self.max_leverage)
+                # Each coin has its own exchange ceiling (LIT 5x, PUMP 10x...); asking for more is rejected
+                if hasattr(self.hyperliquid_trader, "get_max_leverage"):
+                    coin_max_leverage = self.hyperliquid_trader.get_max_leverage(coin.symbol)
+                    if coin_max_leverage:
+                        leverage = min(leverage, coin_max_leverage)
                 is_buy = signal == "BUY"
 
                 logger.info(f"   Order Direction: {'BUY' if is_buy else 'SELL'}")

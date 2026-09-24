@@ -5,7 +5,9 @@ Keys never leave this process: Nansen returns unsigned EIP-712 typed data, we si
 """
 
 import logging
-from typing import Dict, Optional, List
+import math
+import time
+from typing import Dict, Optional, List, Tuple
 from datetime import datetime
 
 import requests
@@ -37,6 +39,11 @@ class NansenPerpTrader:
     """
 
     BASE_URL = "https://api.nansen.ai/api/v1"
+    HL_INFO_URL = "https://api.hyperliquid.xyz/info"
+    UNIVERSE_TTL_SECONDS = 3600
+    # Hyperliquid lists very low-priced coins as "k" coins (kPEPE, kBONK...): one unit = 1000 tokens,
+    # so its price is 1000x the CoinGecko price and its size is 1/1000 of the token count.
+    K_COIN_SCALE = 1000
 
     # Asset-specific precision (szDecimals - decimals for order size), same as HyperliquidTrader
     ASSET_PRECISION = {
@@ -65,6 +72,8 @@ class NansenPerpTrader:
         self.api_key = api_key
         self.wallet_address = wallet_address
         self.max_leverage = max_leverage
+        self._universe: Optional[Dict[str, dict]] = None
+        self._universe_at = 0.0
         self.account = Account.from_key(
             wallet_private_key if wallet_private_key.startswith("0x") else f"0x{wallet_private_key}"
         )
@@ -207,7 +216,7 @@ class NansenPerpTrader:
         """Prepare (only) a leverage change - no signing, no execution, nothing changes yet."""
         payload = {
             "wallet_address": self.wallet_address,
-            "coin": symbol.upper(),
+            "coin": (self._resolve(symbol) or (symbol.upper(), 1))[0],
             "leverage": leverage,
             "is_cross": is_cross,
         }
@@ -222,7 +231,7 @@ class NansenPerpTrader:
         logger.info(f"Setting {symbol.upper()} leverage to {leverage}x ({mode})")
         return self._prepare_sign_execute("leverage", {
             "wallet_address": self.wallet_address,
-            "coin": symbol.upper(),
+            "coin": (self._resolve(symbol) or (symbol.upper(), 1))[0],
             "leverage": leverage,
             "is_cross": is_cross,
         })
@@ -256,8 +265,14 @@ class NansenPerpTrader:
                 float(entry.get("position", entry).get("marginUsed", 0) or 0)
                 for entry in asset_positions
             )
-            total_collateral = spot_usdc
-            free_collateral = max(0.0, spot_usdc - margin_used)
+            # Standard (non-unified) accounts hold margin in the perps balance instead: spotUsdc is
+            # ~0 there and the funds show up as marginSummary.accountValue / withdrawable. Take the
+            # larger of the two views so both account modes read correctly (max, not sum - in
+            # unified mode the perps fields are only a sub-ledger of the same spot funds).
+            perp_value = float((data.get("marginSummary") or {}).get("accountValue", 0) or 0)
+            withdrawable = float(data.get("withdrawable", 0) or 0)
+            total_collateral = max(spot_usdc, perp_value)
+            free_collateral = max(0.0, spot_usdc - margin_used, withdrawable)
 
             return {
                 "total_collateral": total_collateral,
@@ -269,6 +284,110 @@ class NansenPerpTrader:
         except Exception as e:
             logger.error(f"Failed to fetch Nansen perp account state: {e}")
             return {"error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Hyperliquid asset list: which coins exist, their max leverage / size precision,
+    # and the CoinGecko-symbol <-> Hyperliquid-name translation ("PEPE" <-> "kPEPE")
+    # ------------------------------------------------------------------
+
+    def _get_universe(self) -> Dict[str, dict]:
+        """Live, non-delisted Hyperliquid assets keyed by name, cached for an hour.
+
+        Empty if Hyperliquid is unreachable (retried after 60s) - callers then skip listing
+        checks rather than blocking trades on a metadata hiccup.
+        """
+        now = time.time()
+        if self._universe is not None and now - self._universe_at < self.UNIVERSE_TTL_SECONDS:
+            return self._universe
+        try:
+            response = requests.post(self.HL_INFO_URL, json={"type": "meta"}, timeout=10)
+            response.raise_for_status()
+            self._universe = {a["name"]: a for a in response.json()["universe"] if not a.get("isDelisted")}
+            self._universe_at = now
+        except Exception as e:
+            logger.warning(f"Could not load Hyperliquid asset list: {e}")
+            self._universe = self._universe or {}
+            self._universe_at = now - self.UNIVERSE_TTL_SECONDS + 60
+        return self._universe
+
+    def _resolve(self, symbol: str) -> Optional[Tuple[str, int]]:
+        """CoinGecko symbol -> (Hyperliquid name, price scale), or None if not listed."""
+        symbol = symbol.upper()
+        universe = self._get_universe()
+        if not universe or symbol in universe:
+            return symbol, 1
+        if f"k{symbol}" in universe:
+            return f"k{symbol}", self.K_COIN_SCALE
+        return None
+
+    def _to_base(self, hl_name: str) -> Tuple[str, int]:
+        """Hyperliquid name -> (CoinGecko symbol, price scale). Inverse of _resolve()."""
+        if hl_name[:1] == "k" and hl_name[1:].isupper() and hl_name[1:] not in self._get_universe():
+            return hl_name[1:], self.K_COIN_SCALE
+        return hl_name, 1
+
+    def get_tradable_symbols(self) -> Optional[set]:
+        """CoinGecko-style symbols Hyperliquid lists, or None if the asset list is unavailable."""
+        universe = self._get_universe()
+        if not universe:
+            return None
+        return {self._to_base(name)[0] for name in universe}
+
+    def get_max_leverage(self, symbol: str) -> Optional[int]:
+        """Hyperliquid's per-coin leverage ceiling (e.g. LIT 5x, PUMP 10x, BTC 40x), or None if unknown."""
+        resolved = self._resolve(symbol)
+        if resolved is None:
+            return None
+        asset = self._get_universe().get(resolved[0])
+        return int(asset["maxLeverage"]) if asset and asset.get("maxLeverage") else None
+
+    def get_account_mode(self) -> str:
+        """'unified', 'standard' or 'unknown', from Hyperliquid's public userAbstraction lookup."""
+        try:
+            response = requests.post(
+                self.HL_INFO_URL,
+                json={"type": "userAbstraction", "user": self.wallet_address},
+                timeout=10,
+            )
+            response.raise_for_status()
+            mode = str(response.json()).strip().lower()
+        except Exception as e:
+            logger.warning(f"Could not determine Hyperliquid account mode: {e}")
+            return "unknown"
+
+        if mode in ("unifiedaccount", "portfoliomargin"):
+            return "unified"
+        if mode in ("default", "disabled"):
+            return "standard"
+        return "unknown"
+
+    def ensure_perps_margin(self, min_usd: float = 1.0) -> Optional[dict]:
+        """Standard accounts only: move idle spot USDC into the perps balance so orders have margin.
+
+        Unified accounts already margin from spot (Hyperliquid rejects the transfer there), so
+        they're left alone. If the mode can't be read, the transfer is attempted and a
+        "unified account" rejection is treated as "nothing to do". Only ever moves USDC
+        spot -> perps inside the same wallet; never withdraws.
+        """
+        mode = self.get_account_mode()
+        if mode == "unified":
+            return None
+
+        raw = self.get_account_balance().get("raw") or {}
+        spot_usdc = float(raw.get("spotUsdc", 0) or 0)
+        if spot_usdc < min_usd:
+            return None
+
+        amount = math.floor(spot_usdc * 100) / 100
+        logger.info(f"Account mode '{mode}': moving ${amount:,.2f} spot USDC to perps margin")
+        try:
+            return self.transfer_to_perps(amount)
+        except Exception as e:
+            if "unified" in str(e).lower():
+                logger.info("Unified account detected - spot USDC already counts as margin")
+            else:
+                logger.warning(f"Could not move spot USDC to perps: {e}")
+            return None
 
     def get_open_positions(self) -> List[PositionData]:
         """GET /perp/positions, mapped to PositionData objects (same shape as HyperliquidTrader).
@@ -295,8 +414,12 @@ class NansenPerpTrader:
                 if size == 0:
                     continue
 
-                entry_price = float(pos.get("entryPrice", pos.get("entryPx", 0)) or 0)
-                current_price = float(pos.get("markPrice", pos.get("markPx", entry_price)) or 0)
+                coin_name = pos.get("coin", pos.get("symbol", ""))
+                base_symbol, scale = self._to_base(coin_name)
+                # Prices are reported in CoinGecko units (kPEPE is 1000x); size stays in native
+                # exchange units so close_position() closes exactly what is open.
+                entry_price = float(pos.get("entryPrice", pos.get("entryPx", 0)) or 0) / scale
+                current_price = float(pos.get("markPrice", pos.get("markPx", 0)) or 0) / scale or entry_price
                 leverage_field = pos.get("leverage", 1)
                 leverage = int(leverage_field.get("value", 1)) if isinstance(leverage_field, dict) else int(float(leverage_field or 1))
                 margin_used = float(pos.get("marginUsed", 0) or 0)
@@ -313,8 +436,8 @@ class NansenPerpTrader:
                     pnl_pct = 0
 
                 open_positions.append(PositionData(
-                    position_id=f"{pos.get('coin', '')}_{size}",
-                    symbol=pos.get("coin", pos.get("symbol", "")),
+                    position_id=f"{coin_name}_{size}",
+                    symbol=base_symbol,
                     side=PositionSide.LONG if size > 0 else PositionSide.SHORT,
                     entry_price=entry_price,
                     current_price=current_price,
@@ -349,21 +472,33 @@ class NansenPerpTrader:
     ) -> OrderResult:
         """Open a position via POST /perp/order (prepare) -> sign -> /perp/execute."""
         try:
-            asset_size = round(size_usd / price, self.ASSET_PRECISION.get(symbol.upper(), 4))
+            resolved = self._resolve(symbol)
+            if resolved is None:
+                raise RuntimeError(f"{symbol.upper()} is not listed on Hyperliquid")
+            hl_coin, scale = resolved
+            hl_price = price * scale
+            decimals = (self._get_universe().get(hl_coin) or {}).get(
+                "szDecimals", self.ASSET_PRECISION.get(symbol.upper(), 4)
+            )
+            asset_size = round(size_usd / hl_price, decimals)
+            if asset_size <= 0:
+                raise RuntimeError(
+                    f"${size_usd:.2f} is too small to trade {hl_coin} (rounds to zero at {decimals} size decimals)"
+                )
 
             payload = {
                 "wallet_address": self.wallet_address,
-                "coin": symbol.upper(),
+                "coin": hl_coin,
                 "is_buy": is_buy,
                 "size": asset_size,
-                "price": price,
+                "price": hl_price,
                 "order_type": order_type,
                 "slippage": slippage,
             }
 
             result = self._prepare_sign_execute("order", payload)
             prepared = result["_prepared"]
-            echoed_price = prepared.get("price") or price
+            echoed_price = float(prepared.get("price") or hl_price) / scale
             echoed_size = prepared.get("size") or asset_size
 
             logger.info(f"[SUCCESS] Nansen order placed: {symbol} {'BUY' if is_buy else 'SELL'} {echoed_size} @ ${echoed_price}")
@@ -412,11 +547,13 @@ class NansenPerpTrader:
             # /perp/close has no "slippage" field like /perp/order does - apply the buffer to
             # the price ourselves so the aggressive close order actually crosses the book instead
             # of sitting unmatched at the exact last-seen price (buy higher / sell lower to close).
-            adjusted_price = current_price * (1 + slippage) if is_buy else current_price * (1 - slippage)
+            hl_coin, scale = self._resolve(symbol) or (symbol.upper(), 1)
+            hl_price = current_price * scale
+            adjusted_price = hl_price * (1 + slippage) if is_buy else hl_price * (1 - slippage)
 
             payload = {
                 "wallet_address": self.wallet_address,
-                "coin": symbol.upper(),
+                "coin": hl_coin,
                 "size": close_size,
                 "price": adjusted_price,
                 "is_buy": is_buy,

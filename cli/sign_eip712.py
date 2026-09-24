@@ -5,8 +5,13 @@ Use this to sign the EIP712 payload from the trading agent
 """
 
 import json
+import os
 import sys
 from typing import Dict, Tuple
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 try:
     from eth_account import Account
@@ -158,32 +163,25 @@ def main():
     print("EIP712 SIGNATURE HELPER FOR HYPERLIQUID BUILDER FEE APPROVAL")
     print("=" * 70)
     
-    if len(sys.argv) < 2:
+    private_key = os.getenv("PORTFOLIO_WALLET_PRIVATE_KEY")
+    if not private_key:
+        print("\n[ERROR] PORTFOLIO_WALLET_PRIVATE_KEY not found in .env")
         print("\nUsage:")
-        print("  python cli/sign_eip712.py <private_key>")
-        print("\nExample:")
-        print("  python cli/sign_eip712.py 0x1234abcd...")
-        print("\nSteps:")
-        print("  1. Get the EIP712 payload from the trading agent logs")
-        print("  2. Run this script with your private key")
-        print("  3. Copy the signature {r, s, v}")
-        print("  4. Provide it to the agent via execute_approval_with_signature()")
-        print("\nWARNING: Never share your private key!")
+        print("  python cli/sign_eip712.py [payload.json]")
+        print("\nThe private key is read from PORTFOLIO_WALLET_PRIVATE_KEY in .env - never pass it on the command line.")
         print("=" * 70)
         sys.exit(1)
-    
-    private_key = sys.argv[1]
-    
+
     # Try to read from stdin first
     print("\nMethod 1: Paste JSON directly (paste then press Ctrl+D on Unix or Ctrl+Z on Windows):")
-    print("Method 2: Save to file and pass as argument: python cli/sign_eip712.py <key> payload.json")
+    print("Method 2: Save to file and pass as argument: python cli/sign_eip712.py payload.json")
     print()
-    
+
     eip712_payload = None
-    
+
     # Check if a file argument was provided
-    if len(sys.argv) > 2:
-        payload_file = sys.argv[2]
+    if len(sys.argv) > 1:
+        payload_file = sys.argv[1]
         try:
             with open(payload_file, 'r') as f:
                 eip712_payload = json.load(f)
@@ -223,7 +221,7 @@ def main():
             if not eip712_json:
                 print("[ERROR] No input received")
                 print("\nAlternative: Save payload to a file and run:")
-                print("  python cli/sign_eip712.py YOUR_PRIVATE_KEY payload.json")
+                print("  python cli/sign_eip712.py payload.json")
                 sys.exit(1)
             
             eip712_payload = json.loads(eip712_json)
@@ -238,7 +236,7 @@ def main():
         except Exception as e:
             print(f"[ERROR] Failed to read input: {e}")
             print("\nAlternative: Save payload to a file and run:")
-            print("  python cli/sign_eip712.py YOUR_PRIVATE_KEY payload.json")
+            print("  python cli/sign_eip712.py payload.json")
             sys.exit(1)
     
     # Sign the payload

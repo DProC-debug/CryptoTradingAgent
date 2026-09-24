@@ -29,7 +29,7 @@ The agent will output the **EIP712 payload**. Copy it.
 pip install eth-account
 
 # Sign the payload (paste when prompted)
-python cli/sign_eip712.py YOUR_PRIVATE_KEY
+python cli/sign_eip712.py
 # Then paste the EIP712 payload and press Ctrl+D
 ```
 

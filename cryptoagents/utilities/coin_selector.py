@@ -65,6 +65,11 @@ class CoinSelector:
         self.max_market_cap_rank = int(os.getenv("HYPERLIQUID_MAX_MARKET_CAP_RANK", "500"))
         self.min_liquidity_score = 5
 
+        # Symbols the exchange actually lists (set by the trading loop each cycle). None = unknown,
+        # so no listing filter - otherwise coins like RAY/TWT/JASMY get a full analysis cycle and
+        # then fail at order time with "Unknown coin".
+        self.tradable_symbols: Optional[set] = None
+
         # Automatic stablecoin filter: a fixed exclude_symbols list only catches stablecoins
         # you already know the ticker for - new/less common ones (USD1, FDUSD, PYUSD, USDe...)
         # slip through by name. Anything trading within this band of $1 is almost certainly
@@ -94,7 +99,8 @@ class CoinSelector:
             candidate.volume_24h_usd >= self.min_volume_usd and
             self.min_market_cap_rank <= candidate.market_cap_rank <= self.max_market_cap_rank and
             candidate.liquidity_score >= self.min_liquidity_score and
-            not self._looks_like_stablecoin(candidate)
+            not self._looks_like_stablecoin(candidate) and
+            (self.tradable_symbols is None or candidate.symbol in self.tradable_symbols)
         )
 
     async def fetch_candidates(self, market_data: Optional[Dict] = None) -> List[CoinCandidate]:
